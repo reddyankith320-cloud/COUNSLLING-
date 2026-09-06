@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 require('dotenv').config();
 
 // Enforce Asia/Kolkata Timezone
@@ -89,6 +90,9 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// Gzip compression for all responses
+app.use(compression());
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));

@@ -30,7 +30,8 @@ const Transcripts = () => {
       const res = await api.get('/admin/appointments');
       // Only show appointments that have been booked or completed
       setAppointments(res.data.filter(a => a.status === 'Booked' || a.status === 'Completed'));
-    } catch (err) {
+    } catch (error) {
+      console.error(error);
       toast.error('Failed to load appointments');
     }
   };
@@ -41,7 +42,9 @@ const Transcripts = () => {
       if (res.data.settings.store_transcripts) {
         setStoreTranscripts(res.data.settings.store_transcripts === 'true');
       }
-    } catch (err) {}
+    } catch (error) {
+      console.error('Failed to fetch settings:', error);
+    }
   };
 
   const toggleStorage = async () => {
@@ -50,7 +53,8 @@ const Transcripts = () => {
     try {
       await api.put('/admin/settings/store_transcripts', { value: newValue.toString() });
       toast.success(newValue ? 'Transcript storage enabled' : 'Transcript storage disabled');
-    } catch (err) {
+    } catch (error) {
+      console.error(error);
       setStoreTranscripts(!newValue);
       toast.error('Failed to update setting');
     }
@@ -61,7 +65,8 @@ const Transcripts = () => {
     try {
       const res = await api.get(`/admin/transcripts/${apptId}`);
       setTranscripts(res.data.transcripts);
-    } catch (err) {
+    } catch (error) {
+      console.error(error);
       toast.error('Failed to fetch transcripts');
     } finally {
       setLoading(false);
@@ -76,7 +81,8 @@ const Transcripts = () => {
       await api.delete(`/admin/transcripts/${selectedAppt}`);
       setTranscripts([]);
       toast.success('Transcripts deleted');
-    } catch (err) {
+    } catch (error) {
+      console.error(error);
       toast.error('Failed to delete transcripts');
     }
   };

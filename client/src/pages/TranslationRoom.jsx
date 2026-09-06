@@ -83,6 +83,7 @@ const TranslationRoom = () => {
       if (isRecording) stopRecording();
       newSocket.disconnect();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appointmentId, role]);
 
   // Whenever language changes, re-join room to update target lang

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Shield, Clock, Video, Heart, CheckCircle2, ArrowRight, UserCircle, Activity } from 'lucide-react';
+import { Shield, Video, Heart, CheckCircle2, ArrowRight, UserCircle, Activity } from 'lucide-react';
 
 const HomePage = () => {
   return (

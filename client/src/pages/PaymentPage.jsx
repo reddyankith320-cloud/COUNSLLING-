@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useLocation, useNavigate, Navigate } from "react-router-dom";
 import { Shield, AlertCircle, RefreshCw, CreditCard, Smartphone, Building2, CheckCircle } from "lucide-react";
 import toast from "react-hot-toast";
