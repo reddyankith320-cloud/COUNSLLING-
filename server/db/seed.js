@@ -14,7 +14,7 @@ async function seed() {
     console.log('✅ Schema created successfully');
 
     // Create default admin
-    const email = process.env.ADMIN_EMAIL || 'admin@telugucounseling.com';
+    const email = process.env.ADMIN_EMAIL || 'adullasridevireddy810@gmail.com';
     const password = process.env.ADMIN_PASSWORD || 'Admin@123456';
     const hashedPassword = await bcrypt.hash(password, 12);
 

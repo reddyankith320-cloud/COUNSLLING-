@@ -73,7 +73,7 @@ npm run dev
 
 ## Default Admin Credentials
 For testing purposes, the seed script creates a default admin account:
-* **Email**: admin@findmypeace.in
+* **Email**: adullasridevireddy810@gmail.com
 * **Password**: Admin@123456
 
 *(Please change this password in production!)*
