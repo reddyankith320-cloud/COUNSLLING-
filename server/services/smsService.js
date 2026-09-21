@@ -40,8 +40,8 @@ class SmsService {
   /**
    * Send follow-up payment request SMS
    */
-  async sendFollowupPaymentRequest({ clientName, mobile, paymentLink }) {
-    const message = `Dear ${clientName},\n\nBased on today's counseling session, a follow-up consultation has been recommended.\n\nPlease complete the follow-up consultation fee of \u20B9499 using the secure payment link below.\n\n${paymentLink}\n\nOnce payment is completed, you can choose your preferred date and time for the next session.\n\nThank you.\n- Find My Peace`;
+  async sendFollowupPaymentRequest({ clientName, mobile, bookingLink }) {
+    const message = `Dear ${clientName},\n\nBased on today's counseling session, a follow-up consultation has been recommended.\n\nBook your follow-up session (\u20B9499) and choose a date & time here:\n${bookingLink}\n\nPlease use the same mobile number and email. Your Google Meet link is sent right after payment.\n\nThank you.\n- Find My Peace`;
     return this.sendSms(mobile, message);
   }
 

@@ -14,7 +14,7 @@ const ClientList = () => {
   const fetchClients = useCallback(async (search = '') => {
     setLoading(true);
     try {
-      const res = await api.get(`/admin/clients?search=${search}&archived=${showArchived}`);
+      const res = await api.get('/admin/clients', { params: { search, archived: showArchived } });
       setClients(res.data.clients);
     } catch (error) {
       console.error(error);
@@ -105,8 +105,8 @@ const ClientList = () => {
                         {format(new Date(appt.appointment_date), 'MMM dd, yyyy')}
                       </p>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold
-                        ${appt.status === 'completed' ? 'bg-green-100 text-green-700' : 
-                          appt.status === 'cancelled' ? 'bg-red-100 text-red-700' : 
+                        ${appt.status === 'Completed' ? 'bg-green-100 text-green-700' : 
+                          appt.status === 'Cancelled' ? 'bg-red-100 text-red-700' : 
                           'bg-sky-100 text-sky-700'}`}
                       >
                         {appt.status}

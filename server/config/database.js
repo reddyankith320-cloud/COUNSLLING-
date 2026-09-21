@@ -10,9 +10,10 @@ pool.on('connect', () => {
   console.log('✅ Connected to PostgreSQL database');
 });
 
+// An idle client dropping (network blip, DB restart) should not take the whole
+// API down — the pool will open a fresh connection on the next query.
 pool.on('error', (err) => {
-  console.error('❌ PostgreSQL connection error:', err);
-  process.exit(-1);
+  console.error('❌ PostgreSQL idle client error:', err.message);
 });
 
 // Helper function to run queries

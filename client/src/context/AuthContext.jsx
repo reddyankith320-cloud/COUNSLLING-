@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import api from '../services/api';
+import api, { setStoredToken } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -14,8 +14,9 @@ export const AuthProvider = ({ children }) => {
       try {
         const response = await api.get('/auth/me');
         setAdmin(response.data.admin);
-      } catch (error) {
-        console.error(error);
+      } catch {
+        // Not logged in (or token expired) — that's a normal state, not an error
+        setStoredToken(null);
         setAdmin(null);
       } finally {
         setLoading(false);
@@ -27,6 +28,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const response = await api.post('/auth/login', { email, password });
+    setStoredToken(response.data.token);
     setAdmin(response.data.admin);
     return response.data;
   };
@@ -37,6 +39,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('Logout failed', error);
     } finally {
+      setStoredToken(null);
       setAdmin(null);
     }
   };

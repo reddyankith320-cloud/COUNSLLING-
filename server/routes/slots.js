@@ -104,12 +104,13 @@ router.delete('/holidays/:id', async (req, res, next) => {
   }
 });
 
-// GET /api/slots/blocked-slots?date=YYYY-MM-DD
+// GET /api/slots/blocked-slots?date=YYYY-MM-DD  (omit date for all upcoming)
 router.get('/blocked-slots', async (req, res, next) => {
   try {
     const { date } = req.query;
-    if (!date) return res.status(400).json({ error: 'Date is required' });
-    const blockedSlots = await dateService.getBlockedSlotsForDate(date);
+    const blockedSlots = date
+      ? await dateService.getBlockedSlotsForDate(date)
+      : await dateService.getAllBlockedSlots();
     res.json({ blockedSlots });
   } catch (error) {
     next(error);
@@ -119,9 +120,11 @@ router.get('/blocked-slots', async (req, res, next) => {
 // POST /api/slots/block-slot
 router.post('/block-slot', async (req, res, next) => {
   try {
-    const { date, startTime, endTime, reason } = req.body;
+    const { date, startTime, reason } = req.body;
     if (!date || !startTime) return res.status(400).json({ error: 'Date and startTime are required' });
-    const result = await dateService.blockSlot(date, startTime, endTime, reason);
+    const slot = dateService.getTimeSlots().find(s => s.startTime === startTime);
+    if (!slot) return res.status(400).json({ error: 'Unknown time slot' });
+    const result = await dateService.blockSlot(date, slot.startTime, slot.endTime, reason);
     req.io?.emit('availability_changed');
     res.json({ message: 'Slot blocked', blockedSlot: result.rows[0] });
   } catch (error) {

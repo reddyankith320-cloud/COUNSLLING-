@@ -1,31 +1,53 @@
 import React, { useState, useEffect } from 'react';
-import { io } from 'socket.io-client';
-const socket = io(import.meta.env.VITE_SOCKET_URL || `${window.location.protocol}//${window.location.host}`);
 import { useSearchParams } from 'react-router-dom';
-import { Video, Check, X, FileText, Send, Loader2, Calendar as CalendarIcon, Phone, MessageSquare } from 'lucide-react';
+import { Video, Check, X, FileText, Send, Loader2, Calendar as CalendarIcon, Phone, MessageSquare, Clock } from 'lucide-react';
 import api from '../../services/api';
+import { onSocketEvent } from '../../services/socket';
+import { PRICING } from '../../config/site';
 import toast from 'react-hot-toast';
+
+const FILTERS = [
+  { key: 'today', label: 'Today' },
+  { key: 'upcoming', label: 'Upcoming' },
+  { key: 'completed', label: 'Completed' },
+  { key: 'cancelled', label: 'Cancelled' },
+  { key: 'all', label: 'All' },
+];
+
+// Map UI filter -> API status value (DB statuses are capitalised)
+const FILTER_TO_STATUS = {
+  today: 'today',
+  upcoming: 'upcoming',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
+
+const to12h = (t) => {
+  if (!t) return '';
+  const [h, m] = t.substring(0, 5).split(':');
+  const hour = parseInt(h, 10);
+  return `${hour % 12 || 12}:${m} ${hour >= 12 ? 'PM' : 'AM'}`;
+};
 
 const AppointmentList = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const filterParam = searchParams.get('filter') || 'upcoming';
-  
+
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null); // stores appointment ID being acted upon
-  
+
   // Note modal state
   const [noteModal, setNoteModal] = useState({ isOpen: false, text: '', apptId: null, clientId: null });
 
   const fetchAppointments = React.useCallback(async () => {
     setLoading(true);
     try {
-      let endpoint = '/admin/appointments';
-      if (filterParam === 'today') endpoint += '?status=today';
-      else if (filterParam === 'upcoming') endpoint += '?status=upcoming';
-      else if (filterParam === 'completed') endpoint += '?status=completed';
-      
-      const res = await api.get(endpoint);
+      const params = { limit: 100 };
+      const status = FILTER_TO_STATUS[filterParam];
+      if (status) params.status = status;
+
+      const res = await api.get('/admin/appointments', { params });
       setAppointments(res.data.appointments);
     } catch (error) {
       console.error(error);
@@ -38,12 +60,7 @@ const AppointmentList = () => {
   useEffect(() => {
     fetchAppointments();
     // Listen for real-time updates
-    socket.on('availability_changed', () => {
-      fetchAppointments();
-    });
-    return () => {
-      socket.off('availability_changed');
-    };
+    return onSocketEvent('availability_changed', fetchAppointments);
   }, [fetchAppointments]);
 
   const handleFilterChange = (filter) => {
@@ -55,8 +72,7 @@ const AppointmentList = () => {
     try {
       if (type === 'yes') {
         await api.post(`/admin/appointments/${id}/followup`);
-        toast.success('Follow-up initiated. Payment link sent to client.');
-        // Optionally show payment link in a modal
+        toast.success('Follow-up recommended. Booking link sent to the client.');
       } else {
         await api.post(`/admin/appointments/${id}/complete`);
         toast.success('Treatment marked complete. Client archived.');
@@ -79,7 +95,7 @@ const AppointmentList = () => {
       fetchAppointments();
     } catch (error) {
       console.error(error);
-      toast.error('Failed to change status');
+      toast.error(error.response?.data?.error || 'Failed to change status');
     } finally {
       setActionLoading(null);
     }
@@ -102,113 +118,116 @@ const AppointmentList = () => {
   };
 
   const getStatusBadge = (status) => {
-    switch (status) {
-      case 'Booked': return <span className="px-2 py-1 bg-sky-100 text-sky-700 rounded-full text-xs font-semibold">Booked</span>;
-      case 'Completed': return <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-semibold">Completed</span>;
-      case 'Cancelled': return <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-semibold">Cancelled</span>;
-      case 'pending_payment': return <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-semibold">Pending Payment</span>;
-      default: return <span className="px-2 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-semibold">{status}</span>;
-    }
+    const styles = {
+      Booked: 'bg-sky-100 text-sky-700',
+      Completed: 'bg-emerald-100 text-emerald-700',
+      Cancelled: 'bg-red-100 text-red-700',
+      pending_payment: 'bg-amber-100 text-amber-700',
+    };
+    const label = status === 'pending_payment' ? 'Pending Payment' : status;
+    return (
+      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${styles[status] || 'bg-slate-100 text-slate-700'}`}>
+        {label}
+      </span>
+    );
   };
 
   return (
     <div className="animate-fade-in space-y-6">
-      
+
       {/* Header & Tabs */}
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-        <h2 className="text-xl font-bold text-slate-800 mb-4">Appointments</h2>
-        <div className="flex overflow-x-auto hide-scrollbar space-x-2">
-          {['today', 'upcoming', 'completed', 'all'].map(tab => (
-            <button
-              key={tab}
-              onClick={() => handleFilterChange(tab)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap
-                ${filterParam === tab 
-                  ? 'bg-slate-900 text-white' 
-                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-            >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
+      <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-100">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Appointments</h2>
+            <p className="text-sm text-slate-500">{appointments.length} {filterParam === 'all' ? 'total' : filterParam} appointment{appointments.length === 1 ? '' : 's'}</p>
+          </div>
+          <div className="flex overflow-x-auto hide-scrollbar gap-1.5 bg-slate-100 p-1 rounded-xl">
+            {FILTERS.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => handleFilterChange(tab.key)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap
+                  ${filterParam === tab.key
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                  }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Appointment List */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="animate-spin text-sky-500 w-8 h-8" />
+          <Loader2 className="animate-spin text-teal-500 w-8 h-8" />
         </div>
       ) : appointments.length === 0 ? (
-        <div className="bg-white p-12 rounded-xl border border-slate-100 text-center text-slate-500 shadow-sm">
+        <div className="bg-white p-12 rounded-2xl border border-slate-100 text-center text-slate-500 shadow-sm">
           <CalendarIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p className="text-lg font-medium">No appointments found</p>
           <p className="text-sm">Try changing the filter</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {appointments.map((appt) => (
-            <div key={appt.id} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-md transition-all flex flex-col">
-              
+            <div key={appt.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-md transition-all flex flex-col">
+
               {/* Card Header */}
-              <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50/50">
-                <div>
-                  <h3 className="font-bold text-slate-800 text-lg">{appt.full_name}</h3>
-                  <p className="text-xs text-slate-500">{appt.age} yrs • {appt.gender}</p>
+              <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50/60">
+                <div className="min-w-0">
+                  <h3 className="font-bold text-slate-800 text-lg truncate">{appt.full_name}</h3>
+                  <p className="text-xs text-slate-500">
+                    {appt.age} yrs{appt.gender ? ` • ${appt.gender.replace(/_/g, ' ')}` : ''} • #{appt.id}
+                  </p>
                 </div>
                 {getStatusBadge(appt.status)}
               </div>
 
               {/* Card Body */}
-              <div className="p-4 space-y-4 flex-grow">
+              <div className="p-4 space-y-3.5 flex-grow">
                 <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+                  <div className="w-9 h-9 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
                     <CalendarIcon size={16} />
                   </div>
                   <div>
-                    <p className="font-semibold text-slate-800">{new Date(appt.appointment_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                    <p className="font-semibold text-slate-800">{new Date(appt.appointment_date).toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                    <p className="text-xs flex items-center gap-1"><Clock size={12} /> {to12h(appt.start_time)} – {to12h(appt.end_time)} IST</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                    <Phone size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <p>+91 {appt.mobile}</p>
+                    <p className="text-xs truncate">{appt.email}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                  <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                    <span className="font-bold text-base">₹</span>
+                  </div>
+                  <div>
+                    <p className="font-medium">
+                      {appt.consultation_type || 'Consultation'}
+                      {appt.payment_amount ? ` · ₹${Number(appt.payment_amount).toLocaleString('en-IN')}` : ''}
+                    </p>
                     <p className="text-xs">
-                      {appt.start_time
-                        ? `${appt.start_time?.substring(0, 5)} - ${appt.end_time?.substring(0, 5)}`
-                        : '6:00 PM - 7:00 PM'}
+                      Payment: <span className={appt.payment_status === 'completed' ? 'text-emerald-600 font-medium' : ''}>{appt.payment_status || 'N/A'}</span>
+                      {appt.follow_up_count !== undefined && ` · Follow-ups ${appt.follow_up_count}/${PRICING.maxFollowUps}`}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                    <Phone size={16} />
-                  </div>
-                  <div>
-                    <p>{appt.mobile}</p>
-                    <p className="text-xs truncate max-w-[200px]">{appt.email}</p>
-                  </div>
-                </div>
-
-                {appt.follow_up_count !== undefined && (
-                  <div className="flex items-center gap-3 text-sm text-slate-600">
-                    <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-                      <FileText size={16} />
-                    </div>
-                    <div>
-                      <p className="font-medium">{appt.follow_up_count}/3 Follow-ups</p>
-                    </div>
-                  </div>
-                )}
-                
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
-                    <span className="font-bold text-lg">₹</span>
-                  </div>
-                  <div>
-                    <p className="font-medium">{appt.consultation_type || 'Consultation'}</p>
-                    <p className="text-xs">Payment: {appt.payment_status || 'N/A'}</p>
-                  </div>
-                </div>
-
                 {appt.problem_description && (
-                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 mt-2">
-                    <p className="text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wider">Problem</p>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Concern</p>
                     <p className="text-sm text-slate-700 line-clamp-2" title={appt.problem_description}>
                       {appt.problem_description}
                     </p>
@@ -217,37 +236,37 @@ const AppointmentList = () => {
               </div>
 
               {/* Card Actions */}
-              <div className="p-4 border-t border-slate-100 bg-slate-50/50 mt-auto">
+              <div className="p-4 border-t border-slate-100 bg-slate-50/60 mt-auto">
                 {appt.status === 'Booked' && (
                   <div className="flex flex-col gap-2">
                     <div className="flex gap-2">
                       {appt.meet_join_url ? (
                         <div className="flex flex-col gap-2 flex-grow">
-                          <a 
-                            href={appt.meet_join_url} 
-                            target="_blank" 
+                          <a
+                            href={appt.meet_join_url}
+                            target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2 px-3 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors"
+                            className="flex items-center justify-center gap-2 px-3 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors"
                           >
                             <Video size={16} />
-                            Google Meet
+                            Join Google Meet
                           </a>
-                          <a 
-                            href={`/translate/${appt.id}?role=counselor&meetUrl=${encodeURIComponent(appt.meet_join_url)}`} 
-                            target="_blank" 
+                          <a
+                            href={`/translate/${appt.id}?role=counselor&meetUrl=${encodeURIComponent(appt.meet_join_url)}`}
+                            target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-100 transition-colors"
+                            className="flex items-center justify-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
                           >
                             <MessageSquare size={16} />
-                            Translate Room
+                            Translation Room
                           </a>
                         </div>
                       ) : (
                         <button disabled className="flex-1 bg-slate-200 text-slate-500 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 cursor-not-allowed">
-                          <Video size={16} /> No Link
+                          <Video size={16} /> No Meet Link
                         </button>
                       )}
-                      <button 
+                      <button
                         onClick={() => setNoteModal({ isOpen: true, text: '', apptId: appt.id, clientId: appt.client_id })}
                         className="p-2 border border-slate-200 bg-white hover:bg-slate-50 rounded-lg text-slate-600 transition-colors self-start"
                         title="Add Note"
@@ -256,40 +275,19 @@ const AppointmentList = () => {
                       </button>
                     </div>
                     <div className="flex gap-2 mt-1">
-                      <button 
+                      <button
                         onClick={() => handleStatusChange(appt.id, 'Completed')}
                         disabled={actionLoading === `${appt.id}-status`}
-                        className="flex-1 text-emerald-600 border border-emerald-200 hover:bg-emerald-50 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                        className="flex-1 text-emerald-700 border border-emerald-200 bg-white hover:bg-emerald-50 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
                       >
                         Complete Session
                       </button>
-                      <button 
+                      <button
                         onClick={() => handleStatusChange(appt.id, 'Cancelled')}
                         disabled={actionLoading === `${appt.id}-status`}
-                        className="flex-1 text-red-500 border border-red-200 hover:bg-red-50 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                        className="flex-1 text-red-600 border border-red-200 bg-white hover:bg-red-50 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
                       >
                         Cancel
-                      </button>
-                    </div>
-                    <div className="flex gap-2 mt-1">
-                      <button 
-                        onClick={() => {
-                          const newTime = window.prompt("Enter new Date and Time (e.g. 2026-08-10 19:00):");
-                          if (newTime) {
-                             // Basic prompt for reschedule. Real app would have a date picker modal.
-                             alert("Please use the client app to re-book, or we will add a modal here soon.");
-                          }
-                        }}
-                        className="flex-1 text-sky-600 border border-sky-200 hover:bg-sky-50 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                      >
-                        Reschedule
-                      </button>
-                      <button 
-                        onClick={() => handleStatusChange(appt.id, 'Blocked')}
-                        disabled={actionLoading === `${appt.id}-status`}
-                        className="flex-1 text-slate-600 border border-slate-300 hover:bg-slate-100 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                      >
-                        Block Slot
                       </button>
                     </div>
                   </div>
@@ -297,38 +295,44 @@ const AppointmentList = () => {
 
                 {appt.status === 'Cancelled' && (
                   <div className="flex gap-2">
-                    <button 
+                    <button
                       onClick={() => handleStatusChange(appt.id, 'Booked')}
                       disabled={actionLoading === `${appt.id}-status`}
-                      className="flex-1 text-sky-600 border border-sky-200 hover:bg-sky-50 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                      className="flex-1 text-teal-700 border border-teal-200 bg-white hover:bg-teal-50 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                     >
-                      Reopen Slot
+                      Restore Booking
                     </button>
                   </div>
                 )}
 
+                {appt.status === 'pending_payment' && (
+                  <p className="text-xs text-amber-700 text-center py-1.5 bg-amber-50 rounded-lg border border-amber-200">
+                    Awaiting payment — slot is released automatically after 15 minutes.
+                  </p>
+                )}
+
                 {appt.status === 'Completed' && appt.requires_followup === null && (
                   <div>
-                    {(appt.follow_up_count || 0) >= 3 ? (
-                      <p className="text-xs font-semibold text-amber-600 text-center py-2 bg-amber-50 rounded-lg border border-amber-200">
-                        This client has reached the maximum number of follow-up sessions.
+                    {(appt.follow_up_count || 0) >= PRICING.maxFollowUps ? (
+                      <p className="text-xs font-semibold text-amber-700 text-center py-2 bg-amber-50 rounded-lg border border-amber-200">
+                        Maximum follow-up sessions reached for this client.
                       </p>
                     ) : (
                       <>
-                        <p className="text-xs font-semibold text-slate-600 mb-2 text-center">Require Follow-up Session?</p>
+                        <p className="text-xs font-semibold text-slate-600 mb-2 text-center">Recommend a follow-up session?</p>
                         <div className="flex gap-2">
-                          <button 
+                          <button
                             onClick={() => handleFollowup(appt.id, 'yes')}
                             disabled={actionLoading === `${appt.id}-yes`}
-                            className="flex-1 border border-green-500 text-green-600 hover:bg-green-50 py-1.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                            className="flex-1 border border-emerald-500 text-emerald-700 bg-white hover:bg-emerald-50 py-1.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
                           >
                             {actionLoading === `${appt.id}-yes` ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                             Yes
                           </button>
-                          <button 
+                          <button
                             onClick={() => handleFollowup(appt.id, 'no')}
                             disabled={actionLoading === `${appt.id}-no`}
-                            className="flex-1 border border-red-500 text-red-600 hover:bg-red-50 py-1.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                            className="flex-1 border border-red-400 text-red-600 bg-white hover:bg-red-50 py-1.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
                           >
                             {actionLoading === `${appt.id}-no` ? <Loader2 size={16} className="animate-spin" /> : <X size={16} />}
                             No
@@ -338,13 +342,13 @@ const AppointmentList = () => {
                     )}
                   </div>
                 )}
-                
+
                 {appt.status === 'Completed' && appt.requires_followup !== null && (
                   <div className="text-center text-sm font-medium">
                     {appt.requires_followup ? (
-                      <span className="text-green-600 flex items-center justify-center gap-1"><Send size={14}/> Follow-up {appt.follow_up_count}/3 sent</span>
+                      <span className="text-emerald-700 flex items-center justify-center gap-1"><Send size={14}/> Follow-up {appt.follow_up_count}/{PRICING.maxFollowUps} recommended</span>
                     ) : (
-                      <span className="text-slate-500 flex items-center justify-center gap-1"><Check size={14}/> Treatment Complete</span>
+                      <span className="text-slate-500 flex items-center justify-center gap-1"><Check size={14}/> Treatment complete</span>
                     )}
                   </div>
                 )}
@@ -369,18 +373,18 @@ const AppointmentList = () => {
                 value={noteModal.text}
                 onChange={(e) => setNoteModal({...noteModal, text: e.target.value})}
                 placeholder="Enter confidential notes for this session..."
-                className="w-full h-32 border border-slate-300 rounded-lg p-3 resize-none focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                className="w-full h-32 border border-slate-300 rounded-lg p-3 resize-none focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
               ></textarea>
               <div className="mt-4 flex justify-end gap-2">
-                <button 
+                <button
                   onClick={() => setNoteModal({ isOpen: false, text: '', apptId: null, clientId: null })}
                   className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors"
                 >
                   Cancel
                 </button>
-                <button 
+                <button
                   onClick={saveNote}
-                  className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition-colors shadow-sm"
+                  className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors shadow-sm"
                 >
                   Save Note
                 </button>

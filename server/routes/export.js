@@ -35,14 +35,14 @@ router.get('/excel', async (req, res, next) => {
 
     const result = await query(
       `SELECT a.id, c.full_name, c.age, c.gender, c.mobile, c.email,
-              a.appointment_date, a.status,
+              a.appointment_date, a.start_time, a.end_time, a.status, a.consultation_type,
               a.problem_description, a.meet_join_url,
               p.amount, p.status as payment_status, p.created_at as payment_date
        FROM appointments a
        JOIN clients c ON a.client_id = c.id
        LEFT JOIN payments p ON a.id = p.appointment_id AND p.is_followup = FALSE
        ${whereClause}
-       ORDER BY a.appointment_date DESC`,
+       ORDER BY a.appointment_date DESC, a.start_time ASC`,
       params
     );
 
@@ -75,13 +75,13 @@ router.get('/pdf', async (req, res, next) => {
 
     const result = await query(
       `SELECT a.id, c.full_name, c.age, c.mobile, c.email,
-              a.appointment_date, a.status,
+              a.appointment_date, a.start_time, a.end_time, a.status, a.consultation_type,
               p.amount, p.status as payment_status
        FROM appointments a
        JOIN clients c ON a.client_id = c.id
        LEFT JOIN payments p ON a.id = p.appointment_id AND p.is_followup = FALSE
        ${whereClause}
-       ORDER BY a.appointment_date DESC`,
+       ORDER BY a.appointment_date DESC, a.start_time ASC`,
       params
     );
 

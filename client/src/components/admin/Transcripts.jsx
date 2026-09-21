@@ -27,9 +27,10 @@ const Transcripts = () => {
 
   const fetchAppointments = async () => {
     try {
-      const res = await api.get('/admin/appointments');
+      const res = await api.get('/admin/appointments', { params: { limit: 200 } });
       // Only show appointments that have been booked or completed
-      setAppointments(res.data.filter(a => a.status === 'Booked' || a.status === 'Completed'));
+      const list = res.data.appointments || [];
+      setAppointments(list.filter(a => a.status === 'Booked' || a.status === 'Completed'));
     } catch (error) {
       console.error(error);
       toast.error('Failed to load appointments');

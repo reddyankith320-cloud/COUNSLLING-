@@ -24,7 +24,7 @@ const bookingValidation = [
   body('age')
     .isInt({ min: 1, max: 120 }).withMessage('Age must be between 1 and 120'),
   body('gender')
-    .optional()
+    .optional({ values: 'falsy' }) // the form sends "" when nothing is selected
     .isIn(['male', 'female', 'other', 'prefer_not_to_say']).withMessage('Invalid gender'),
   body('mobile')
     .trim()
@@ -41,7 +41,11 @@ const bookingValidation = [
     .isLength({ min: 10, max: 5000 }).withMessage('Description must be 10-5000 characters'),
   body('appointmentDate')
     .notEmpty().withMessage('Appointment date is required')
-    .isISO8601().withMessage('Invalid date format'),
+    .matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('Invalid date format (expected YYYY-MM-DD)'),
+  body('startTime')
+    .matches(/^\d{2}:\d{2}$/).withMessage('Invalid start time'),
+  body('endTime')
+    .matches(/^\d{2}:\d{2}$/).withMessage('Invalid end time'),
   validate,
 ];
 

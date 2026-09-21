@@ -103,8 +103,9 @@ class EmailService {
   /**
    * Send follow-up payment request email
    */
-  async sendFollowupPaymentRequest({ clientName, email, paymentLink }) {
+  async sendFollowupPaymentRequest({ clientName, email, bookingLink, followUpNumber }) {
     const subject = 'Follow-up Session Recommended - Find My Peace';
+    const sessionLabel = followUpNumber ? `Follow-up session ${followUpNumber} of 3` : 'Follow-up session';
     const html = `
       <!DOCTYPE html>
       <html>
@@ -128,12 +129,12 @@ class EmailService {
           </div>
           <div class="content">
             <p>Dear <strong>${clientName}</strong>,</p>
-            <p>Based on today's counseling session, a follow-up consultation has been recommended.</p>
-            <p>Please complete the follow-up consultation fee of <span class="amount">₹499</span> using the secure payment link below.</p>
+            <p>Based on today's counseling session, a follow-up consultation has been recommended (${sessionLabel}).</p>
+            <p>Choose a date and time that suits you and complete the follow-up fee of <span class="amount">₹499</span> securely via Razorpay. Please use the same mobile number and email so we can link it to your file.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${paymentLink}" class="pay-btn">💳 Pay ₹499 Now</a>
+              <a href="${bookingLink}" class="pay-btn">📅 Book Follow-up Session</a>
             </div>
-            <p>Once payment is completed, you can choose your preferred date and time for the next session.</p>
+            <p>You will receive your Google Meet link immediately after payment.</p>
             <p>Thank you.</p>
           </div>
           <div class="footer">
@@ -144,7 +145,7 @@ class EmailService {
       </html>
     `;
 
-    const text = `Dear ${clientName},\n\nBased on today's counseling session, a follow-up consultation has been recommended.\n\nPlease complete the follow-up consultation fee of ₹499 using the secure payment link below.\n\n${paymentLink}\n\nOnce payment is completed, you can choose your preferred date and time for the next session.\n\nThank you.\n- Find My Peace`;
+    const text = `Dear ${clientName},\n\nBased on today's counseling session, a follow-up consultation has been recommended (${sessionLabel}).\n\nChoose your preferred date and time and complete the follow-up fee of ₹499 here:\n${bookingLink}\n\nPlease use the same mobile number and email so we can link it to your file. You will receive your Google Meet link immediately after payment.\n\nThank you.\n- Find My Peace`;
 
     return this.sendEmail({ to: email, subject, html, text });
   }

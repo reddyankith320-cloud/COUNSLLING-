@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../config/database');
-const { authenticate, authorizeAdmin } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { noteValidation } = require('../middleware/validator');
-const paymentService = require('../services/paymentService');
 const { decrypt } = require('../utils/encryption');
+const { todayIST } = require('../utils/dates');
 const meetService = require('../services/meetService');
 const emailService = require('../services/emailService');
 const smsService = require('../services/smsService');
@@ -16,7 +16,7 @@ router.use(authenticate);
 // GET /api/admin/dashboard — Dashboard stats
 router.get('/dashboard', async (req, res, next) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayIST();
 
     const [todayAppts, upcomingAppts, completedAppts, cancelledAppts, totalEarnings, totalClients] =
       await Promise.all([
@@ -60,7 +60,7 @@ router.get('/appointments', async (req, res, next) => {
   try {
     const { status, date, page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayIST();
 
     let whereClause = '';
     const params = [];
@@ -200,30 +200,16 @@ router.post('/appointments/:id/followup', async (req, res, next) => {
       [newCount, appointment.client_id]
     );
 
-    // Create Razorpay order for follow-up session (₹499)
-    const order = await paymentService.createOrder({
-      amount: 499 * 100, // paise
-      receipt: 'followup_' + id + '_' + Date.now(),
-      notes: {
-        clientId: appointment.client_id,
-        clientName: appointment.full_name,
-        consultationType: 'Follow-up ' + newCount,
-      },
-    });
-
-    // Store payment record
-    await query(
-      `INSERT INTO payments (appointment_id, client_id, amount, status, is_followup)
-       VALUES ($1, $2, 499, 'pending', TRUE)`,
-      [id, appointment.client_id]
-    );
-
-    // Send notifications
+    // The client books the follow-up through the normal booking page: it picks
+    // up their history and charges the ₹499 follow-up fee automatically, with
+    // slot selection and Razorpay checkout in one flow.
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
     const notifPayload = {
       clientName: appointment.full_name,
       email: appointment.email,
       mobile: appointment.mobile,
-      paymentLink: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment?order_id=${order.id}`,
+      followUpNumber: newCount,
+      bookingLink: `${frontendUrl}/booking`,
     };
 
     Promise.allSettled([
@@ -239,8 +225,7 @@ router.post('/appointments/:id/followup', async (req, res, next) => {
     });
 
     res.json({
-      message: 'Follow-up session initiated. Razorpay order created.',
-      razorpayOrderId: order.id,
+      message: 'Follow-up recommended. Booking link sent to the client.',
       followUpCount: newCount,
     });
   } catch (error) {

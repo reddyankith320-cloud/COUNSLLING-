@@ -1,12 +1,25 @@
-import React, { useState, useEffect } from "react";
-import { io } from "socket.io-client";
-const socket = io(import.meta.env.VITE_SOCKET_URL || `${window.location.protocol}//${window.location.host}`);
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Calendar as CalendarIcon, Clock, User, FileText, ChevronRight, ChevronLeft, CheckCircle2, Shield } from "lucide-react";
+import { Calendar as CalendarIcon, Clock, User, FileText, ChevronRight, ChevronLeft, CheckCircle2, Shield, Lock, Video } from "lucide-react";
 import DatePicker from "react-datepicker";
-import "react-datepicker/dist/react-datepicker.css";
 import toast from "react-hot-toast";
 import api from "../services/api";
+import { onSocketEvent } from "../services/socket";
+import { COUNSELOR, PRICING } from "../config/site";
+
+const toYMD = (dateObj) => {
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const day = String(dateObj.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const STEPS = [
+  { num: 1, title: "Your details", icon: User },
+  { num: 2, title: "Questionnaire", icon: FileText },
+  { num: 3, title: "Pick a slot", icon: CalendarIcon },
+  { num: 4, title: "Review", icon: CheckCircle2 },
+];
 
 const BookingPage = () => {
   const navigate = useNavigate();
@@ -17,7 +30,7 @@ const BookingPage = () => {
   const [availableSlots, setAvailableSlots] = useState([]);
   const [fetchingSlots, setFetchingSlots] = useState(false);
   const [maxFollowupReached, setMaxFollowupReached] = useState(false);
-  
+
   // Form State
   const [formData, setFormData] = useState({
     fullName: "",
@@ -32,26 +45,22 @@ const BookingPage = () => {
 
   const [errors, setErrors] = useState({});
 
-  // Fetch unavailable dates on load
-  const fetchDates = async () => {
+  // Fetch unavailable dates (this month + next)
+  const fetchDates = useCallback(async () => {
     setFetchingDates(true);
     try {
       const today = new Date();
       const year = today.getFullYear();
       const month = today.getMonth() + 1;
-      
-      const response1 = await api.get(`/slots/unavailable?year=${year}&month=${month}`);
-      
       const nextMonth = month === 12 ? 1 : month + 1;
       const nextYear = month === 12 ? year + 1 : year;
-      const response2 = await api.get(`/slots/unavailable?year=${nextYear}&month=${nextMonth}`);
-      
-      const allUnavailable = [
-        ...response1.data.booked, ...response1.data.blocked,
-        ...response2.data.booked, ...response2.data.blocked
-      ];
-      
-      setUnavailableDates(allUnavailable.map(d => new Date(d).toDateString()));
+
+      const [r1, r2] = await Promise.all([
+        api.get(`/slots/unavailable`, { params: { year, month } }),
+        api.get(`/slots/unavailable`, { params: { year: nextYear, month: nextMonth } }),
+      ]);
+
+      setUnavailableDates([...r1.data.allUnavailable, ...r2.data.allUnavailable]);
     } catch (error) {
       console.error(error);
       toast.error("Failed to fetch calendar availability");
@@ -59,40 +68,35 @@ const BookingPage = () => {
     } finally {
       setFetchingDates(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchDates();
-    socket.on("availability_changed", fetchDates);
-    return () => socket.off("availability_changed", fetchDates);
+    return onSocketEvent("availability_changed", fetchDates);
+  }, [fetchDates]);
+
+  // Fetch available slots when a date is selected (and refresh on live updates)
+  const fetchSlots = useCallback(async (dateObj) => {
+    setFetchingSlots(true);
+    try {
+      const res = await api.get(`/slots/available-slots`, { params: { date: toYMD(dateObj) } });
+      setAvailableSlots(res.data.slots);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to load time slots");
+    } finally {
+      setFetchingSlots(false);
+    }
   }, []);
 
-  // Fetch available slots when a date is selected
   useEffect(() => {
     if (!formData.appointmentDate) {
       setAvailableSlots([]);
       return;
     }
-    const fetchSlots = async () => {
-      setFetchingSlots(true);
-      try {
-        const dateObj = formData.appointmentDate;
-        const year = dateObj.getFullYear();
-        const month = String(dateObj.getMonth() + 1).padStart(2, "0");
-        const day = String(dateObj.getDate()).padStart(2, "0");
-        const formattedDate = `${year}-${month}-${day}`;
-
-        const res = await api.get(`/slots/available-slots?date=${formattedDate}`);
-        setAvailableSlots(res.data.slots);
-      } catch (err) {
-        console.error(err);
-        toast.error("Failed to load time slots");
-      } finally {
-        setFetchingSlots(false);
-      }
-    };
-    fetchSlots();
-  }, [formData.appointmentDate]);
+    fetchSlots(formData.appointmentDate);
+    return onSocketEvent("availability_changed", () => fetchSlots(formData.appointmentDate));
+  }, [formData.appointmentDate, fetchSlots]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -104,23 +108,24 @@ const BookingPage = () => {
 
   const validateStep1 = () => {
     const newErrors = {};
-    if (!formData.fullName.trim()) newErrors.fullName = "Full Name is required";
+    if (!formData.fullName.trim()) newErrors.fullName = "Full name is required";
+    else if (formData.fullName.trim().length < 2) newErrors.fullName = "Please enter your full name";
     if (!formData.age) newErrors.age = "Age is required";
-    else if (isNaN(formData.age) || formData.age < 1 || formData.age > 120) newErrors.age = "Valid age is required";
-    if (!formData.mobile.trim()) newErrors.mobile = "Mobile Number is required";
-    else if (!/^[6-9]\d{9}$/.test(formData.mobile)) newErrors.mobile = "Invalid Indian mobile number";
+    else if (isNaN(formData.age) || formData.age < 1 || formData.age > 120) newErrors.age = "Enter a valid age";
+    if (!formData.mobile.trim()) newErrors.mobile = "Mobile number is required";
+    else if (!/^[6-9]\d{9}$/.test(formData.mobile)) newErrors.mobile = "Enter a valid 10-digit Indian mobile number";
     if (!formData.email.trim()) newErrors.email = "Email is required";
-    else if (!/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = "Invalid email format";
-    
+    else if (!/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = "Enter a valid email address";
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const validateStep2 = () => {
     const newErrors = {};
-    if (!formData.problemDescription.trim()) newErrors.problemDescription = "Please describe your problem briefly";
-    else if (formData.problemDescription.length < 10) newErrors.problemDescription = "Description must be at least 10 characters";
-    
+    if (!formData.problemDescription.trim()) newErrors.problemDescription = "Please describe what brings you here";
+    else if (formData.problemDescription.trim().length < 10) newErrors.problemDescription = "Please write at least 10 characters";
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -129,7 +134,7 @@ const BookingPage = () => {
     const newErrors = {};
     if (!formData.appointmentDate) newErrors.appointmentDate = "Please select a date";
     if (!formData.appointmentTime) newErrors.appointmentTime = "Please select a time slot";
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -139,36 +144,39 @@ const BookingPage = () => {
     if (step === 1) isValid = validateStep1();
     if (step === 2) isValid = validateStep2();
     if (step === 3) isValid = validateStep3();
-    
-    if (isValid) setStep(prev => prev + 1);
+
+    if (isValid) {
+      setStep(prev => prev + 1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   };
 
-  const prevStep = () => setStep(prev => prev - 1);
+  const prevStep = () => {
+    setStep(prev => prev - 1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const handleSubmit = async () => {
     if (!validateStep3()) return;
-    
+
     setLoading(true);
     try {
-      const dateObj = formData.appointmentDate;
-      const year = dateObj.getFullYear();
-      const month = String(dateObj.getMonth() + 1).padStart(2, "0");
-      const day = String(dateObj.getDate()).padStart(2, "0");
-      
       const payload = {
-        ...formData,
-        appointmentDate: `${year}-${month}-${day}`,
+        fullName: formData.fullName.trim(),
+        age: parseInt(formData.age, 10),
+        gender: formData.gender,
+        mobile: formData.mobile.trim(),
+        email: formData.email.trim(),
+        problemDescription: formData.problemDescription.trim(),
+        appointmentDate: toYMD(formData.appointmentDate),
         startTime: formData.appointmentTime.startTime,
         endTime: formData.appointmentTime.endTime,
-        age: parseInt(formData.age)
       };
 
       const response = await api.post("/bookings", payload);
-      
-      toast.success("Booking initiated!");
-      
-      navigate("/payment", { 
-        state: { 
+
+      navigate("/payment", {
+        state: {
           paymentDetails: response.data.payment,
           bookingDetails: response.data.booking,
           clientName: formData.fullName,
@@ -186,52 +194,58 @@ const BookingPage = () => {
         return;
       }
 
+      if (status === 409) {
+        // Slot was taken while the user was filling the form — refresh and send them back
+        toast.error(errMsg, { duration: 6000 });
+        setFormData(prev => ({ ...prev, appointmentTime: null }));
+        if (formData.appointmentDate) fetchSlots(formData.appointmentDate);
+        setStep(3);
+        return;
+      }
+
       toast.error(errMsg);
-      
+
       if (error.response?.data?.details) {
         const backendErrors = {};
         error.response.data.details.forEach(err => {
           backendErrors[err.field] = err.message;
         });
         setErrors(backendErrors);
+        if (backendErrors.fullName || backendErrors.age || backendErrors.mobile || backendErrors.email) setStep(1);
+        else if (backendErrors.problemDescription) setStep(2);
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const steps = [
-    { num: 1, title: "Personal Details", icon: <User size={20} /> },
-    { num: 2, title: "Questionnaire", icon: <FileText size={20} /> },
-    { num: 3, title: "Select Slot", icon: <CalendarIcon size={20} /> },
-    { num: 4, title: "Review", icon: <CheckCircle2 size={20} /> }
-  ];
+  const fieldClass = (name) => `input-field ${errors[name] ? "input-error" : ""}`;
 
   return (
-    <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-sand-50 py-10 sm:py-14 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-10">
-          <h1 className="text-3xl font-bold text-slate-900">Book a Counseling Session</h1>
-          <p className="mt-2 text-slate-600">Schedule your appointment with Adulla Sridevi Reddy</p>
-          <div className="mt-4 inline-flex items-center gap-3 bg-white border border-slate-200 rounded-xl px-5 py-3 shadow-sm">
-            <div className="w-10 h-10 bg-sky-100 rounded-full flex items-center justify-center">
-              <User className="text-sky-600" size={20} />
+          <span className="eyebrow">Book a session</span>
+          <h1 className="font-display text-3xl sm:text-4xl font-semibold text-slate-900 mt-3">Schedule your counseling session</h1>
+          <div className="mt-5 inline-flex items-center gap-3 bg-white border border-slate-200 rounded-2xl px-5 py-3 shadow-sm">
+            <div className="w-10 h-10 bg-teal-600 rounded-xl flex items-center justify-center text-white font-display font-semibold">
+              {COUNSELOR.initials}
             </div>
             <div className="text-left">
-              <p className="font-semibold text-slate-800 text-sm">Adulla Sridevi Reddy</p>
-              <p className="text-xs text-slate-500">Master of Social Work (MSW) - Postgraduate Degree &middot; 20+ Years of Professional Counseling Experience</p>
+              <p className="font-semibold text-slate-800 text-sm">{COUNSELOR.name}</p>
+              <p className="text-xs text-slate-500">{COUNSELOR.qualification} &middot; {COUNSELOR.experience} experience</p>
             </div>
           </div>
         </div>
 
         {maxFollowupReached && (
-          <div className="mb-8 p-5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900">
+          <div className="mb-8 p-5 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900">
             <div className="flex items-start gap-3">
               <Shield className="text-amber-600 flex-shrink-0 mt-0.5" size={22} />
               <div>
                 <p className="font-bold text-base">Maximum follow-up sessions reached.</p>
                 <p className="text-sm mt-1">
-                  Maximum of 3 follow-up sessions has been completed. Please contact the counselor for further assistance if required.
+                  The maximum of {PRICING.maxFollowUps} follow-up sessions has been completed. Please contact the counselor for further assistance.
                 </p>
               </div>
             </div>
@@ -239,63 +253,82 @@ const BookingPage = () => {
         )}
 
         {/* Stepper */}
-        <div className="mb-10">
-          <div className="flex justify-between items-center relative">
-            <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-full h-1 bg-slate-200 z-0 hidden sm:block"></div>
-            <div className="absolute left-0 top-1/2 transform -translate-y-1/2 h-1 bg-sky-500 z-0 transition-all duration-300 hidden sm:block" style={{ width: `${((step - 1) / (steps.length - 1)) * 100}%` }}></div>
-            
-            {steps.map((s) => (
-              <div key={s.num} className="relative z-10 flex flex-col items-center">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center border-4 transition-colors duration-300 ${step >= s.num ? "bg-sky-500 border-sky-100 text-white" : "bg-white border-slate-200 text-slate-400"}`}>
-                  {s.icon}
+        <div className="mb-8">
+          <div className="flex justify-between items-start relative">
+            <div className="absolute left-[12%] right-[12%] top-6 h-0.5 bg-slate-200 z-0"></div>
+            <div
+              className="absolute left-[12%] top-6 h-0.5 bg-teal-500 z-0 transition-all duration-500"
+              style={{ width: `${((step - 1) / (STEPS.length - 1)) * 76}%` }}
+            ></div>
+
+            {STEPS.map(({ num, title, icon: Icon }) => {
+              const done = step > num;
+              const active = step === num;
+              return (
+                <div key={num} className="relative z-10 flex flex-col items-center w-1/4">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                    done ? "bg-teal-600 border-teal-600 text-white" :
+                    active ? "bg-white border-teal-600 text-teal-700 shadow-glow" :
+                    "bg-white border-slate-200 text-slate-400"
+                  }`}>
+                    {done ? <CheckCircle2 size={20} /> : <Icon size={20} />}
+                  </div>
+                  <span className={`mt-2 text-[11px] sm:text-xs font-semibold text-center ${active || done ? "text-teal-700" : "text-slate-400"}`}>{title}</span>
                 </div>
-                <span className={`mt-2 text-xs font-medium hidden sm:block ${step >= s.num ? "text-sky-600" : "text-slate-400"}`}>{s.title}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
-        <div className="card p-6 md:p-8 animate-fade-in shadow-lg shadow-slate-200/50">
-          
+        <div className="card p-6 sm:p-8 shadow-soft">
+
           {step === 1 && (
             <div className="space-y-6 animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-800 mb-6 border-b pb-2">Personal Details</h2>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-slate-900">Your details</h2>
+                <p className="text-sm text-slate-500 mt-1">We'll use these to send your meeting link and confirmation.</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Full Name *</label>
+                  <label htmlFor="fullName" className="block text-sm font-medium text-slate-700 mb-2">Full name <span className="text-red-500">*</span></label>
                   <input
+                    id="fullName"
                     type="text"
                     name="fullName"
+                    autoComplete="name"
                     value={formData.fullName}
                     onChange={handleInputChange}
-                    className={`input-field ${errors.fullName ? "border-red-500 ring-1 ring-red-500" : ""}`}
+                    className={fieldClass("fullName")}
                     placeholder="Enter your full name"
                   />
-                  {errors.fullName && <p className="mt-1 text-sm text-red-500">{errors.fullName}</p>}
+                  {errors.fullName && <p className="mt-1.5 text-sm text-red-500">{errors.fullName}</p>}
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Age *</label>
+                    <label htmlFor="age" className="block text-sm font-medium text-slate-700 mb-2">Age <span className="text-red-500">*</span></label>
                     <input
+                      id="age"
                       type="number"
                       name="age"
+                      inputMode="numeric"
                       value={formData.age}
                       onChange={handleInputChange}
-                      className={`input-field ${errors.age ? "border-red-500 ring-1 ring-red-500" : ""}`}
+                      className={fieldClass("age")}
                       placeholder="e.g. 25"
                       min="1" max="120"
                     />
-                    {errors.age && <p className="mt-1 text-sm text-red-500">{errors.age}</p>}
+                    {errors.age && <p className="mt-1.5 text-sm text-red-500">{errors.age}</p>}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Gender</label>
+                    <label htmlFor="gender" className="block text-sm font-medium text-slate-700 mb-2">Gender</label>
                     <select
+                      id="gender"
                       name="gender"
                       value={formData.gender}
                       onChange={handleInputChange}
-                      className="input-field bg-white"
+                      className="input-field"
                     >
                       <option value="">Select</option>
                       <option value="male">Male</option>
@@ -307,71 +340,81 @@ const BookingPage = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Mobile Number *</label>
+                  <label htmlFor="mobile" className="block text-sm font-medium text-slate-700 mb-2">Mobile number <span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">+91</span>
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-slate-500 font-medium text-sm border-r border-slate-200 pr-3 my-2.5">+91</span>
                     <input
+                      id="mobile"
                       type="tel"
                       name="mobile"
+                      inputMode="numeric"
+                      autoComplete="tel-national"
                       value={formData.mobile}
-                      onChange={handleInputChange}
-                      className={`input-field pl-10 ${errors.mobile ? "border-red-500 ring-1 ring-red-500" : ""}`}
+                      onChange={(e) => handleInputChange({ target: { name: "mobile", value: e.target.value.replace(/\D/g, "").slice(0, 10) } })}
+                      className={`${fieldClass("mobile")} pl-16`}
                       placeholder="9876543210"
                       maxLength="10"
                     />
                   </div>
-                  {errors.mobile && <p className="mt-1 text-sm text-red-500">{errors.mobile}</p>}
+                  {errors.mobile && <p className="mt-1.5 text-sm text-red-500">{errors.mobile}</p>}
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Email Address *</label>
+                  <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-2">Email address <span className="text-red-500">*</span></label>
                   <input
+                    id="email"
                     type="email"
                     name="email"
+                    autoComplete="email"
                     value={formData.email}
                     onChange={handleInputChange}
-                    className={`input-field ${errors.email ? "border-red-500 ring-1 ring-red-500" : ""}`}
+                    className={fieldClass("email")}
                     placeholder="your.email@example.com"
                   />
-                  {errors.email && <p className="mt-1 text-sm text-red-500">{errors.email}</p>}
+                  {errors.email && <p className="mt-1.5 text-sm text-red-500">{errors.email}</p>}
                 </div>
               </div>
+
+              <p className="text-xs text-slate-500 flex items-center gap-1.5"><Lock size={12} /> Returning client? Use the same mobile number and email so your follow-up pricing is applied automatically.</p>
             </div>
           )}
 
           {step === 2 && (
             <div className="space-y-6 animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-800 mb-6 border-b pb-2">Pre-Counseling Questionnaire</h2>
-              
-              <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 mb-6">
-                <p className="text-sm text-sky-800 leading-relaxed">
-                  To help us serve you better, please briefly describe what brings you to counseling today.
-                  Your response is <strong className="font-semibold">completely confidential</strong> and will only be seen by your counselor.
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-slate-900">Pre-counseling questionnaire</h2>
+                <p className="text-sm text-slate-500 mt-1">This helps your counselor prepare for your session.</p>
+              </div>
+
+              <div className="bg-teal-50 border border-teal-100 rounded-2xl p-4 flex gap-3">
+                <Shield className="text-teal-600 flex-shrink-0 mt-0.5" size={18} />
+                <p className="text-sm text-teal-900 leading-relaxed">
+                  Please briefly describe what brings you to counseling today. Your response is <strong className="font-semibold">completely confidential</strong> and will only be seen by your counselor.
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
-                  What challenges or issues would you like to discuss? *
+                <label htmlFor="problemDescription" className="block text-sm font-medium text-slate-700 mb-2">
+                  What challenges or issues would you like to discuss? <span className="text-red-500">*</span>
                 </label>
-                <div className="relative">
-                  <textarea
-                    name="problemDescription"
-                    value={formData.problemDescription}
-                    onChange={handleInputChange}
-                    rows="5"
-                    className={`input-field resize-none ${errors.problemDescription ? "border-red-500 ring-1 ring-red-500" : ""}`}
-                    placeholder="Please provide a brief description of your current feelings, challenges, or what you hope to achieve through counseling..."
-                  ></textarea>
-                </div>
+                <textarea
+                  id="problemDescription"
+                  name="problemDescription"
+                  value={formData.problemDescription}
+                  onChange={handleInputChange}
+                  rows="6"
+                  maxLength="5000"
+                  className={`${fieldClass("problemDescription")} resize-none leading-relaxed`}
+                  placeholder="Share your current feelings, challenges, or what you hope to achieve through counseling..."
+                ></textarea>
                 <div className="flex justify-between items-center mt-2">
                   {errors.problemDescription ? (
                     <p className="text-sm text-red-500">{errors.problemDescription}</p>
                   ) : (
-                    <p className="text-sm text-slate-500">This helps the counselor prepare for your session.</p>
+                    <p className="text-sm text-slate-500">Take your time — there are no wrong answers.</p>
                   )}
-                  <p className={`text-xs ${formData.problemDescription.length < 10 ? "text-red-400" : "text-slate-400"}`}>
-                    {formData.problemDescription.length} chars (min 10)
+                  <p className={`text-xs tabular-nums ${formData.problemDescription.trim().length < 10 ? "text-amber-600" : "text-slate-400"}`}>
+                    {formData.problemDescription.length} / 5000
                   </p>
                 </div>
               </div>
@@ -380,20 +423,23 @@ const BookingPage = () => {
 
           {step === 3 && (
             <div className="space-y-6 animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-800 mb-6 border-b pb-2">Select Preferred Date & Time</h2>
-              
-              <div className="grid md:grid-cols-2 gap-8">
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-slate-900">Pick a date and time</h2>
+                <p className="text-sm text-slate-500 mt-1">Sessions are {PRICING.sessionMinutes} minutes, in the evening (IST).</p>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-6">
                 {/* Calendar Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
-                    <CalendarIcon size={18} className="text-sky-500" />
-                    Available Dates
-                  </label>
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm flex justify-center">
+                  <p className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
+                    <CalendarIcon size={16} className="text-teal-600" />
+                    Available dates
+                  </p>
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200 flex justify-center">
                     {fetchingDates ? (
-                      <div className="h-64 flex flex-col items-center justify-center text-slate-400">
-                        <div className="w-8 h-8 border-4 border-sky-200 border-t-sky-500 rounded-full animate-spin mb-4"></div>
-                        <p>Loading calendar...</p>
+                      <div className="h-72 flex flex-col items-center justify-center text-slate-400">
+                        <div className="w-8 h-8 border-4 border-teal-100 border-t-teal-500 rounded-full animate-spin mb-4"></div>
+                        <p className="text-sm">Loading calendar...</p>
                       </div>
                     ) : (
                       <DatePicker
@@ -403,9 +449,8 @@ const BookingPage = () => {
                           if (errors.appointmentDate) setErrors(prev => ({ ...prev, appointmentDate: "" }));
                         }}
                         minDate={new Date()}
-                        excludeDates={unavailableDates.map(d => new Date(d))}
+                        excludeDates={unavailableDates.map(d => new Date(`${d}T00:00:00`))}
                         inline
-                        calendarClassName="shadow-none border-0 font-sans custom-calendar"
                       />
                     )}
                   </div>
@@ -414,48 +459,51 @@ const BookingPage = () => {
 
                 {/* Time Slot Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
-                    <Clock size={18} className="text-sky-500" />
-                    Available Time Slots
-                  </label>
-                  
-                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm min-h-[300px]">
+                  <p className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
+                    <Clock size={16} className="text-teal-600" />
+                    Available time slots
+                  </p>
+
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200 min-h-[300px] flex flex-col">
                     {!formData.appointmentDate ? (
-                      <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 space-y-3">
-                        <CalendarIcon size={32} className="opacity-50" />
-                        <p>Please select a date first to view available time slots.</p>
+                      <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-400 space-y-3 px-4">
+                        <CalendarIcon size={32} className="opacity-40" />
+                        <p className="text-sm">Select a date first to see available time slots.</p>
                       </div>
                     ) : fetchingSlots ? (
-                      <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                        <div className="w-8 h-8 border-4 border-sky-200 border-t-sky-500 rounded-full animate-spin mb-4"></div>
-                        <p>Loading slots...</p>
+                      <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                        <div className="w-8 h-8 border-4 border-teal-100 border-t-teal-500 rounded-full animate-spin mb-4"></div>
+                        <p className="text-sm">Loading slots...</p>
                       </div>
-                    ) : availableSlots.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-3">
-                        <p>No slots available for this date.</p>
+                    ) : availableSlots.length === 0 || availableSlots.every(s => !s.available) ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-500 space-y-2 px-4">
+                        <p className="font-medium">No slots available on this date.</p>
+                        <p className="text-sm text-slate-400">Please choose another day.</p>
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-3">
-                        {availableSlots.map((slot, idx) => {
+                      <div className="flex flex-col gap-2.5">
+                        <p className="text-xs text-slate-500 px-1">
+                          {formData.appointmentDate.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+                        </p>
+                        {availableSlots.map((slot) => {
                           const isSelected = formData.appointmentTime?.startTime === slot.startTime;
                           return (
                             <button
-                              key={idx}
+                              key={slot.startTime}
+                              type="button"
                               disabled={!slot.available}
                               onClick={() => {
                                 setFormData(prev => ({ ...prev, appointmentTime: slot }));
                                 if (errors.appointmentTime) setErrors(prev => ({ ...prev, appointmentTime: "" }));
                               }}
-                              className={`
-                                w-full py-4 px-4 rounded-xl border flex justify-between items-center transition-all
-                                ${!slot.available ? "bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-70" : 
-                                  isSelected ? "bg-sky-50 border-sky-500 text-sky-700 ring-1 ring-sky-500 shadow-sm" : 
-                                  "bg-white border-slate-200 text-slate-700 hover:border-sky-300 hover:shadow-sm"}
-                              `}
+                              className={`w-full py-3.5 px-4 rounded-xl border-2 flex justify-between items-center transition-all
+                                ${!slot.available ? "bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed" :
+                                  isSelected ? "bg-teal-50 border-teal-600 text-teal-800 shadow-sm" :
+                                  "bg-white border-slate-200 text-slate-700 hover:border-teal-300 hover:bg-teal-50/40"}`}
                             >
-                              <span className="font-medium text-lg tracking-wide">{slot.display}</span>
-                              {isSelected && <CheckCircle2 className="text-sky-500" size={20} />}
-                              {!slot.available && <span className="text-xs bg-slate-200 px-2 py-1 rounded-md">Booked</span>}
+                              <span className={`font-semibold ${!slot.available ? "line-through" : ""}`}>{slot.display}</span>
+                              {isSelected && <CheckCircle2 className="text-teal-600" size={20} />}
+                              {!slot.available && <span className="text-[11px] font-medium bg-slate-200 text-slate-600 px-2 py-0.5 rounded-md">Unavailable</span>}
                             </button>
                           );
                         })}
@@ -470,81 +518,85 @@ const BookingPage = () => {
 
           {step === 4 && (
             <div className="space-y-6 animate-fade-in">
-              <h2 className="text-2xl font-bold text-slate-800 mb-6 border-b pb-2">Review & Pay</h2>
-              
-              <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-slate-900">Review and pay</h2>
+                <p className="text-sm text-slate-500 mt-1">Please check your details before proceeding to payment.</p>
+              </div>
+
+              <div className="bg-sand-50 rounded-2xl p-5 sm:p-6 border border-sand-200">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-y-6 gap-x-8">
                   <div>
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Client Details</h3>
-                    <div className="space-y-2">
-                      <p className="text-slate-800"><span className="font-medium text-slate-600 w-24 inline-block">Name:</span> {formData.fullName}</p>
-                      <p className="text-slate-800"><span className="font-medium text-slate-600 w-24 inline-block">Age/Gender:</span> {formData.age} / {formData.gender || "Not specified"}</p>
-                      <p className="text-slate-800"><span className="font-medium text-slate-600 w-24 inline-block">Mobile:</span> +91 {formData.mobile}</p>
-                      <p className="text-slate-800"><span className="font-medium text-slate-600 w-24 inline-block">Email:</span> {formData.email}</p>
-                    </div>
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Client details</h3>
+                    <dl className="space-y-2 text-sm">
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Name</dt><dd className="text-slate-800 font-medium">{formData.fullName}</dd></div>
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Age / Gender</dt><dd className="text-slate-800 font-medium">{formData.age} / {formData.gender ? formData.gender.replace(/_/g, " ") : "Not specified"}</dd></div>
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Mobile</dt><dd className="text-slate-800 font-medium">+91 {formData.mobile}</dd></div>
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Email</dt><dd className="text-slate-800 font-medium break-all">{formData.email}</dd></div>
+                    </dl>
                   </div>
-                  
+
                   <div>
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Appointment Info</h3>
-                    <div className="space-y-2">
-                      <p className="text-slate-800">
-                        <span className="font-medium text-slate-600 w-24 inline-block">Date:</span> 
-                        {formData.appointmentDate?.toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-                      </p>
-                      <p className="text-slate-800">
-                        <span className="font-medium text-slate-600 w-24 inline-block">Time:</span> 
-                        {formData.appointmentTime?.display}
-                      </p>
-                      <p className="text-slate-800">
-                        <span className="font-medium text-slate-600 w-24 inline-block">Mode:</span> 
-                        Online (Google Meet)
-                      </p>
-                    </div>
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Session</h3>
+                    <dl className="space-y-2 text-sm">
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Date</dt><dd className="text-slate-800 font-medium">{formData.appointmentDate?.toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</dd></div>
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Time</dt><dd className="text-slate-800 font-medium">{formData.appointmentTime?.display} IST</dd></div>
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Mode</dt><dd className="text-slate-800 font-medium flex items-center gap-1.5"><Video size={14} className="text-teal-600" /> Online (Google Meet)</dd></div>
+                      <div className="flex gap-3"><dt className="w-24 text-slate-500 shrink-0">Counselor</dt><dd className="text-slate-800 font-medium">{COUNSELOR.name}</dd></div>
+                    </dl>
                   </div>
                 </div>
               </div>
-              
-              <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 flex gap-3 text-sm text-sky-800">
-                <Shield className="flex-shrink-0 text-sky-500" size={20} />
-                <p>Payment of the <strong>Registration Fee (₹7)</strong> or <strong>Follow-up Fee (₹499)</strong> is required before confirming the appointment. By clicking "Proceed to Payment", you agree to our Terms of Service and Privacy Policy. Your payment will be processed securely via Razorpay.</p>
+
+              <div className="bg-teal-50 border border-teal-100 rounded-2xl p-4 flex gap-3 text-sm text-teal-900">
+                <Shield className="flex-shrink-0 text-teal-600 mt-0.5" size={18} />
+                <p>
+                  The exact fee — <strong>Registration (₹{PRICING.registrationFee})</strong> for first-time clients or <strong>Follow-up (₹{PRICING.followUpFee})</strong> for returning clients — is shown on the next screen before you pay. Payment is processed securely by Razorpay; your booking is confirmed only after successful payment.
+                </p>
               </div>
             </div>
           )}
 
           {/* Navigation Buttons */}
-          <div className="mt-8 flex justify-between items-center border-t pt-6">
+          <div className="mt-8 flex justify-between items-center border-t border-slate-100 pt-6">
             {step > 1 ? (
-              <button 
+              <button
+                type="button"
                 onClick={prevStep}
                 disabled={loading}
-                className="btn-secondary flex items-center gap-2 text-slate-600 px-5"
+                className="btn-ghost"
               >
                 <ChevronLeft size={18} /> Back
               </button>
             ) : <div></div>}
 
-            {step < steps.length ? (
-              <button 
+            {step < STEPS.length ? (
+              <button
+                type="button"
                 onClick={nextStep}
-                className="btn-primary flex items-center gap-2 px-6"
+                className="btn-primary px-6"
               >
-                Next Step <ChevronRight size={18} />
+                Continue <ChevronRight size={18} />
               </button>
             ) : (
-              <button 
+              <button
+                type="button"
                 onClick={handleSubmit}
                 disabled={loading}
-                className="btn-primary flex items-center gap-2 px-8 shadow-md"
+                className="btn-primary px-7"
               >
                 {loading ? (
-                  <span className="flex items-center gap-2"><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Processing...</span>
+                  <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Processing...</>
                 ) : (
-                  <span className="flex items-center gap-2">Proceed to Payment <ChevronRight size={18} /></span>
+                  <>Proceed to Payment <ChevronRight size={18} /></>
                 )}
               </button>
             )}
           </div>
         </div>
+
+        <p className="text-center text-xs text-slate-500 mt-6 flex items-center justify-center gap-1.5">
+          <Lock size={12} /> Your information is encrypted and never shared.
+        </p>
       </div>
     </div>
   );

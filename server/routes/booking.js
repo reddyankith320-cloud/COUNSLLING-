@@ -2,32 +2,48 @@ const express = require("express");
 const router = express.Router();
 const { query, getClient } = require("../config/database");
 const { bookingValidation } = require("../middleware/validator");
+const { authenticate } = require("../middleware/auth");
 const slotService = require("../services/slotService");
 const paymentService = require("../services/paymentService");
+const { todayIST } = require("../utils/dates");
 
 // Consultation fee rules
-const INITIAL_FEE   = 7;   // New patient (Registration Fee)
+const INITIAL_FEE   = 999;   // New patient (Registration Fee)
 const FOLLOWUP_FEE  = 499;   // Follow-up sessions 1, 2, 3
 const MAX_FOLLOWUPS = 3;     // Maximum follow-up sessions allowed
 
 // POST /api/bookings — Create a new booking and Razorpay order
 router.post("/", bookingValidation, async (req, res, next) => {
+  const { fullName, age, gender, mobile, email, problemDescription, appointmentDate, startTime, endTime } = req.body;
+
+  // ---- All validation happens BEFORE we open a transaction ----
+  if (!fullName || !age || !mobile || !email || !problemDescription || !appointmentDate || !startTime || !endTime) {
+    return res.status(400).json({ error: "All required fields must be filled in." });
+  }
+
+  if (appointmentDate < todayIST()) {
+    return res.status(400).json({ error: "You cannot book a session in the past. Please choose an upcoming date." });
+  }
+
+  const slotDef = slotService.getTimeSlots().find(s => s.startTime === startTime);
+  if (!slotDef || slotDef.endTime !== endTime) {
+    return res.status(400).json({ error: "Invalid time slot selected." });
+  }
+
+  let isAvailable;
+  try {
+    isAvailable = await slotService.isSlotAvailable(appointmentDate, startTime);
+  } catch (error) {
+    return next(error);
+  }
+  if (!isAvailable) {
+    return res.status(409).json({ error: "This time slot is no longer available. Please choose another." });
+  }
+
   const client = await getClient();
 
   try {
     await client.query("BEGIN");
-
-    const { fullName, age, gender, mobile, email, problemDescription, appointmentDate, startTime, endTime } = req.body;
-
-    if (!fullName || !age || !gender || !mobile || !email || !problemDescription || !appointmentDate || !startTime || !endTime) {
-      return res.status(400).json({ error: "All fields are required" });
-    }
-
-    // Check slot availability
-    const isAvailable = await slotService.isSlotAvailable(appointmentDate, startTime);
-    if (!isAvailable) {
-      return res.status(409).json({ error: "This time slot is no longer available. Please choose another." });
-    }
 
     // Create or find client record
     let clientResult = await client.query(
@@ -39,13 +55,13 @@ router.post("/", bookingValidation, async (req, res, next) => {
     if (clientResult.rows.length > 0) {
       clientId = clientResult.rows[0].id;
       await client.query(
-        "UPDATE clients SET full_name = $1, age = $2, gender = $3, is_archived = FALSE WHERE id = $4",
-        [fullName, age, gender, clientId]
+        "UPDATE clients SET full_name = $1, age = $2, gender = $3, is_archived = FALSE, updated_at = NOW() WHERE id = $4",
+        [fullName, age, gender || null, clientId]
       );
     } else {
       clientResult = await client.query(
         "INSERT INTO clients (full_name, age, gender, mobile, email) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-        [fullName, age, gender, mobile, email]
+        [fullName, age, gender || null, mobile, email]
       );
       clientId = clientResult.rows[0].id;
     }
@@ -108,12 +124,18 @@ router.post("/", bookingValidation, async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    // Other visitors should see this slot as taken while payment is in progress
+    req.io?.emit("availability_changed");
+
     res.status(201).json({
       message: "Booking created. Please complete payment.",
       booking: {
         appointmentId:    appointment.id,
         clientId,
         date:             appointmentDate,
+        startTime,
+        endTime,
+        display:          slotDef.display,
         consultationType,
         amount:           consultationFee,
       },
@@ -125,20 +147,19 @@ router.post("/", bookingValidation, async (req, res, next) => {
       },
     });
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     next(error);
   } finally {
     client.release();
   }
 });
 
-// GET /api/bookings/:id — Get booking details
-router.get("/:id", async (req, res, next) => {
+// GET /api/bookings/:id — Get booking details (admin only: contains client PII)
+router.get("/:id", authenticate, async (req, res, next) => {
   try {
     const result = await query(
       `SELECT a.*, c.full_name, c.age, c.gender, c.mobile, c.email,
-              p.status as payment_status, p.razorpay_payment_id, p.amount as payment_amount,
-              a.consultation_type
+              p.status as payment_status, p.razorpay_payment_id, p.amount as payment_amount
          FROM appointments a
          JOIN clients c ON a.client_id = c.id
          LEFT JOIN payments p ON a.id = p.appointment_id

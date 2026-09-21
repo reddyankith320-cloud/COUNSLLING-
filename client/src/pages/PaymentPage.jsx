@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { useLocation, useNavigate, Navigate } from "react-router-dom";
-import { Shield, AlertCircle, RefreshCw, CreditCard, Smartphone, Building2, CheckCircle } from "lucide-react";
+import { useLocation, useNavigate, Navigate, Link } from "react-router-dom";
+import { Shield, AlertCircle, RefreshCw, CreditCard, Smartphone, Building2, CheckCircle, Lock, Calendar, Clock } from "lucide-react";
 import toast from "react-hot-toast";
 import api from "../services/api";
+import { COUNSELOR } from "../config/site";
 
 const PaymentPage = () => {
   const location = useLocation();
@@ -14,11 +15,16 @@ const PaymentPage = () => {
 
   // Guard: redirect if accessed directly without booking state
   if (!paymentDetails || !bookingDetails) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/booking" replace />;
   }
 
   const { orderId, amount, currency, key } = paymentDetails;
   const consultationType = bookingDetails.consultationType || "Consultation";
+  const isFollowUp = /follow/i.test(consultationType);
+
+  const prettyDate = bookingDetails.date
+    ? new Date(`${bookingDetails.date}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })
+    : null;
 
   const handlePayment = () => {
     setLoading(true);
@@ -40,13 +46,13 @@ const PaymentPage = () => {
         appointmentId: bookingDetails.appointmentId,
       },
       theme: {
-        color: "#0ea5e9",
+        color: "#0d9488",
       },
       modal: {
         ondismiss: () => {
           setLoading(false);
           setPaymentFailed(true);
-          toast.error("Payment cancelled. Your slot is still reserved for a few minutes.");
+          toast.error("Payment cancelled. Your slot is held for 15 minutes.");
         },
       },
       handler: async (response) => {
@@ -71,7 +77,7 @@ const PaymentPage = () => {
           });
         } catch (error) {
           console.error("Payment verification error:", error);
-          toast.error("Payment verification failed. Please contact support.", { id: "pay-verify" });
+          toast.error(error.response?.data?.error || "Payment verification failed. Please contact support.", { id: "pay-verify", duration: 8000 });
           setPaymentFailed(true);
           setLoading(false);
         }
@@ -79,7 +85,7 @@ const PaymentPage = () => {
     };
 
     if (typeof window.Razorpay === "undefined") {
-      toast.error("Razorpay is not loaded. Please refresh the page.");
+      toast.error("Payment gateway failed to load. Please refresh the page.");
       setLoading(false);
       return;
     }
@@ -87,7 +93,7 @@ const PaymentPage = () => {
     const rzp = new window.Razorpay(options);
     rzp.on("payment.failed", (response) => {
       console.error("Payment failed:", response.error);
-      toast.error("Payment failed: " + response.error.description);
+      toast.error("Payment failed: " + (response.error?.description || "Please try again."));
       setPaymentFailed(true);
       setLoading(false);
     });
@@ -101,99 +107,108 @@ const PaymentPage = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center">
-      <div className="max-w-md w-full">
+    <div className="min-h-screen bg-sand-50 py-12 px-4 sm:px-6 lg:px-8 flex flex-col items-center justify-center">
+      <div className="max-w-md w-full animate-fade-in">
 
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-sky-100 rounded-full mb-4">
-            <Shield className="text-sky-600" size={32} />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-teal-100 rounded-2xl mb-4">
+            <Lock className="text-teal-700" size={28} />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900">Complete Payment</h1>
+          <h1 className="font-display text-3xl font-semibold text-slate-900">Complete your payment</h1>
           <p className="mt-2 text-slate-600">
-            You are almost there! Complete your payment to confirm your booking.
+            Almost there, {clientName?.split(" ")[0] || "there"} — your slot is reserved for 15 minutes.
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
+        <div className="bg-white rounded-3xl shadow-soft border border-slate-100 overflow-hidden">
           {/* Amount Header */}
-          <div className="bg-gradient-to-br from-slate-900 to-slate-700 p-6 text-white text-center">
-            <p className="text-slate-400 text-sm mb-1">{consultationType}</p>
-            <h2 className="text-5xl font-extrabold flex justify-center items-start">
-              <span className="text-2xl mt-1 mr-1">₹</span>
-              {amount}
+          <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-teal-900 p-7 text-white text-center relative overflow-hidden">
+            <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-teal-500/20 blur-2xl" />
+            <p className="text-teal-200 text-xs font-bold uppercase tracking-[0.18em] mb-2 relative">{consultationType}</p>
+            <h2 className="font-display text-5xl font-semibold flex justify-center items-start relative">
+              <span className="text-2xl mt-1.5 mr-1 font-sans font-medium">₹</span>
+              {Number(amount).toLocaleString("en-IN")}
             </h2>
-            <p className="text-slate-400 text-xs mt-2">Counseling Session Fee</p>
+            <p className="text-slate-400 text-xs mt-2 relative">
+              {isFollowUp ? "Follow-up counseling session" : "One-time registration · includes first session"}
+            </p>
           </div>
 
           <div className="p-6">
-            <h3 className="font-bold text-slate-800 mb-4">Order Summary</h3>
+            <h3 className="font-semibold text-slate-800 mb-4">Order summary</h3>
 
-            <div className="space-y-3 mb-6">
-              <div className="flex justify-between pb-3 border-b border-slate-100">
-                <span className="text-slate-500">Service</span>
-                <span className="font-medium text-slate-800">Find My Peace – Counseling Session</span>
-              </div>
-              <div className="flex justify-between pb-3 border-b border-slate-100">
-                <span className="text-slate-500">Type</span>
-                <span className="font-medium text-slate-800">{consultationType}</span>
-              </div>
-              {bookingDetails?.date && (
-                <div className="flex justify-between pb-3 border-b border-slate-100">
-                  <span className="text-slate-500">Date</span>
-                  <span className="font-medium text-slate-800">{bookingDetails.date}</span>
+            <div className="space-y-3 mb-6 text-sm">
+              {prettyDate && (
+                <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                  <span className="text-slate-500 flex items-center gap-2"><Calendar size={14} /> Date</span>
+                  <span className="font-medium text-slate-800">{prettyDate}</span>
                 </div>
               )}
-              <div className="flex justify-between">
+              {bookingDetails.display && (
+                <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+                  <span className="text-slate-500 flex items-center gap-2"><Clock size={14} /> Time</span>
+                  <span className="font-medium text-slate-800">{bookingDetails.display} IST</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center pb-3 border-b border-slate-100">
                 <span className="text-slate-500">Counselor</span>
-                <span className="font-medium text-slate-800">Adulla Sridevi Reddy</span>
+                <span className="font-medium text-slate-800">{COUNSELOR.name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Booking ID</span>
+                <span className="font-mono text-xs text-slate-600">#{bookingDetails.appointmentId}</span>
               </div>
             </div>
 
             {paymentFailed && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-lg flex gap-3 text-red-800 text-sm">
+              <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex gap-3 text-red-800 text-sm">
                 <AlertCircle className="flex-shrink-0 text-red-500" size={20} />
-                <p>Payment failed or was cancelled. Please try again.</p>
+                <p>Payment failed or was cancelled. No money has been deducted — please try again.</p>
               </div>
             )}
 
             <button
               onClick={handlePayment}
               disabled={loading}
-              className="w-full btn-primary text-lg py-4 flex justify-center items-center gap-2 shadow-lg shadow-sky-500/30"
+              className="w-full btn-primary text-base py-4"
               id="pay-now-btn"
             >
               {loading ? (
                 <>
                   <RefreshCw className="animate-spin" size={20} />
-                  Opening Razorpay...
+                  Opening secure checkout...
                 </>
               ) : (
                 <>
                   <Shield size={20} />
-                  Pay ₹{amount} Securely
+                  Pay ₹{Number(amount).toLocaleString("en-IN")} securely
                 </>
               )}
             </button>
 
             {/* Accepted payment methods */}
-            <div className="mt-5 p-3 bg-slate-50 rounded-xl">
-              <p className="text-xs text-slate-500 font-semibold mb-2 text-center">Accepted Payment Methods</p>
-              <div className="space-y-1">
+            <div className="mt-5 p-4 bg-sand-50 rounded-2xl border border-sand-200">
+              <p className="text-xs text-slate-500 font-semibold mb-2.5 text-center uppercase tracking-wider">Accepted payment methods</p>
+              <div className="space-y-1.5">
                 {paymentMethods.map((m, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs text-slate-600">
-                    <CheckCircle size={12} className="text-green-500 flex-shrink-0" />
+                  <div key={i} className="flex items-center gap-2 text-sm text-slate-700">
+                    <CheckCircle size={14} className="text-teal-600 flex-shrink-0" />
                     {m.label}
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="mt-4 text-center text-xs text-slate-500 flex items-center justify-center gap-1">
-              <Shield size={12} />
-              Secured by Razorpay. 256-bit SSL encrypted.
+            <div className="mt-4 text-center text-xs text-slate-500 flex items-center justify-center gap-1.5">
+              <Lock size={12} />
+              Secured by Razorpay · 256-bit SSL encrypted
             </div>
           </div>
         </div>
+
+        <p className="text-center text-sm text-slate-500 mt-6">
+          Changed your mind? <Link to="/booking" className="text-teal-700 font-medium hover:underline">Edit your booking</Link>
+        </p>
 
       </div>
     </div>

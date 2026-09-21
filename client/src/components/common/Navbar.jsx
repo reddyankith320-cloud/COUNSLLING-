@@ -1,61 +1,93 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, ArrowRight } from 'lucide-react';
+import Logo from './Logo';
+
+const NAV_LINKS = [
+  { name: 'Home', hash: '' },
+  { name: 'Services', hash: '#services' },
+  { name: 'About', hash: '#about' },
+  { name: 'Pricing', hash: '#pricing' },
+  { name: 'FAQ', hash: '#faq' },
+];
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
+  const onHome = location.pathname === '/';
 
-  const toggleMenu = () => setIsOpen(!isOpen);
   const closeMenu = () => setIsOpen(false);
 
-  const navLinks = [
-    { name: 'Home', path: '/' },
-    { name: 'Services', path: '/#services' },
-    { name: 'About', path: '/#about' },
-  ];
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Close the mobile menu on route change
+  useEffect(() => { setIsOpen(false); }, [location.pathname, location.hash]);
+
+  const isActive = (link) => {
+    if (!onHome) return false;
+    if (!link.hash) return !location.hash;
+    return location.hash === link.hash;
+  };
+
+  const renderLink = (link, mobile = false) => {
+    const base = mobile
+      ? 'block px-4 py-3 rounded-xl text-base font-medium transition-colors'
+      : 'text-sm font-medium transition-colors';
+    const state = isActive(link)
+      ? (mobile ? 'bg-teal-50 text-teal-700' : 'text-teal-700')
+      : (mobile ? 'text-slate-700 hover:bg-slate-50' : 'text-slate-600 hover:text-teal-700');
+
+    // On the home page a plain anchor gives native smooth scrolling; elsewhere
+    // we route to "/" first so the anchor actually exists.
+    return onHome ? (
+      <a key={link.name} href={link.hash || '#top'} className={`${base} ${state}`} onClick={closeMenu}>
+        {link.name}
+      </a>
+    ) : (
+      <Link key={link.name} to={`/${link.hash}`} className={`${base} ${state}`} onClick={closeMenu}>
+        {link.name}
+      </Link>
+    );
+  };
 
   return (
-    <nav className="bg-white/80 backdrop-blur-md sticky top-0 z-50 border-b border-slate-100 shadow-sm">
+    <nav
+      id="top"
+      className={`sticky top-0 z-50 transition-all duration-300 ${
+        scrolled ? 'bg-white/85 backdrop-blur-lg shadow-[0_1px_0_0_rgb(15_23_42/0.06)]' : 'bg-transparent'
+      }`}
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
-          <div className="flex items-center">
-            <Link to="/" className="flex-shrink-0 flex items-center gap-2" onClick={closeMenu}>
-              <div className="w-8 h-8 bg-sky-500 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-base">FMP</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="font-bold text-lg text-slate-800 tracking-tight leading-tight">Find My Peace</span>
-                <span className="text-[10px] text-slate-500 font-medium leading-tight hidden sm:block">Professional Counseling Services · 20+ Years of Experience</span>
-              </div>
-            </Link>
-          </div>
+        <div className="flex justify-between items-center h-[4.5rem]">
+          <Logo onClick={closeMenu} />
 
           {/* Desktop Menu */}
-          <div className="hidden md:flex items-center space-x-8">
-            {navLinks.map((link) => (
-              <a
-                key={link.name}
-                href={link.path.startsWith('/#') && location.pathname === '/' ? link.path.substring(1) : link.path}
-                className="text-slate-600 hover:text-sky-500 font-medium transition-colors"
-                onClick={closeMenu}
-              >
-                {link.name}
-              </a>
-            ))}
-            <Link to="/booking" className="btn-primary" onClick={closeMenu}>
+          <div className="hidden md:flex items-center gap-8">
+            {NAV_LINKS.map((link) => renderLink(link))}
+          </div>
+
+          <div className="hidden md:flex items-center gap-3">
+            <Link to="/booking" className="btn-primary text-sm py-2.5 px-5 group" onClick={closeMenu}>
               Book a Session
+              <ArrowRight size={16} className="group-hover:translate-x-0.5 transition-transform" />
             </Link>
           </div>
 
           {/* Mobile menu button */}
           <div className="flex items-center md:hidden">
             <button
-              onClick={toggleMenu}
-              className="inline-flex items-center justify-center p-2 rounded-md text-slate-500 hover:text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-500 transition-colors"
+              onClick={() => setIsOpen(!isOpen)}
+              aria-expanded={isOpen}
+              aria-label="Toggle navigation"
+              className="inline-flex items-center justify-center p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-colors"
             >
-              <span className="sr-only">Open main menu</span>
-              {isOpen ? <X className="block h-6 w-6" /> : <Menu className="block h-6 w-6" />}
+              {isOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
             </button>
           </div>
         </div>
@@ -63,21 +95,12 @@ const Navbar = () => {
 
       {/* Mobile Menu */}
       {isOpen && (
-        <div className="md:hidden animate-fade-in bg-white border-b border-slate-100">
-          <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
-            {navLinks.map((link) => (
-              <a
-                key={link.name}
-                href={link.path.startsWith('/#') && location.pathname === '/' ? link.path.substring(1) : link.path}
-                className="block px-3 py-2 rounded-md text-base font-medium text-slate-700 hover:text-sky-500 hover:bg-slate-50"
-                onClick={closeMenu}
-              >
-                {link.name}
-              </a>
-            ))}
-            <div className="px-3 py-2 mt-4">
-              <Link to="/booking" className="w-full text-center block btn-primary" onClick={closeMenu}>
-                Book a Session
+        <div className="md:hidden animate-fade-in bg-white border-t border-slate-100 shadow-lg">
+          <div className="px-3 pt-3 pb-4 space-y-1">
+            {NAV_LINKS.map((link) => renderLink(link, true))}
+            <div className="pt-3">
+              <Link to="/booking" className="btn-primary w-full" onClick={closeMenu}>
+                Book a Session <ArrowRight size={16} />
               </Link>
             </div>
           </div>

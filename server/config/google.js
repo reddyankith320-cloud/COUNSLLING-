@@ -21,12 +21,13 @@ function createOAuth2Client() {
 /**
  * Get the authorization URL for the one-time consent flow
  */
-function getAuthUrl() {
+function getAuthUrl(state) {
   const oAuth2Client = createOAuth2Client();
   return oAuth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: SCOPES,
+    state,
   });
 }
 

@@ -16,6 +16,7 @@ import TranslationRoom from './pages/TranslationRoom';
 import Navbar from './components/common/Navbar';
 import Footer from './components/common/Footer';
 import Loader from './components/common/Loader';
+import ScrollManager from './components/common/ScrollManager';
 
 // Protected Route Wrapper
 const ProtectedRoute = ({ children }) => {
@@ -47,28 +48,37 @@ function App() {
   return (
     <AuthProvider>
       <Router>
-        <Toaster position="top-center" toastOptions={{ duration: 4000 }} />
+        <ScrollManager />
+        <Toaster
+          position="top-center"
+          toastOptions={{
+            duration: 4000,
+            style: { borderRadius: '12px', background: '#0f172a', color: '#fff', fontSize: '14px' },
+            success: { iconTheme: { primary: '#14b8a6', secondary: '#fff' } },
+          }}
+        />
         <Routes>
           {/* Client Routes */}
           <Route path="/" element={<ClientLayout><HomePage /></ClientLayout>} />
           <Route path="/booking" element={<ClientLayout><BookingPage /></ClientLayout>} />
           <Route path="/payment" element={<ClientLayout><PaymentPage /></ClientLayout>} />
-          <Route path="/payment/callback" element={<ClientLayout><PaymentPage /></ClientLayout>} />
           <Route path="/confirmation" element={<ClientLayout><ConfirmationPage /></ClientLayout>} />
 
-          {/* Admin Routes */}
+          {/* Live translation room (opened from the confirmation page / admin) */}
           <Route path="/translate/:appointmentId" element={<TranslationRoom />} />
-          
+
+          {/* Admin Routes */}
           <Route path="/admin/login" element={<AdminLoginPage />} />
-          <Route 
-            path="/admin/dashboard/*" 
+          <Route
+            path="/admin/dashboard/*"
             element={
               <ProtectedRoute>
                 <AdminDashboardPage />
               </ProtectedRoute>
-            } 
+            }
           />
-          
+          <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+
           {/* Fallback route */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

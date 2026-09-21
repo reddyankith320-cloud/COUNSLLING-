@@ -6,6 +6,15 @@ const { authenticate, generateToken } = require('../middleware/auth');
 const { loginValidation } = require('../middleware/validator');
 const { authLimiter } = require('../middleware/rateLimiter');
 
+const isProd = process.env.NODE_ENV === 'production';
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProd,
+  // Cross-site cookies need SameSite=None (+Secure) when the SPA lives on another domain
+  sameSite: isProd ? 'none' : 'lax',
+  maxAge: 24 * 60 * 60 * 1000, // 24 hours
+};
+
 // POST /api/auth/login
 router.post('/login', authLimiter, loginValidation, async (req, res, next) => {
   try {
@@ -26,13 +35,10 @@ router.post('/login', authLimiter, loginValidation, async (req, res, next) => {
 
     const token = generateToken({ id: admin.id, email: admin.email, name: admin.name });
 
-    // Set httpOnly cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    });
+    // Set httpOnly cookie (works when the API and frontend share a site).
+    // The token is also returned in the body so the SPA can send it as a
+    // Bearer header when the frontend is hosted on a different domain.
+    res.cookie('token', token, COOKIE_OPTIONS);
 
     res.json({
       message: 'Login successful',
@@ -46,7 +52,8 @@ router.post('/login', authLimiter, loginValidation, async (req, res, next) => {
 
 // POST /api/auth/logout
 router.post('/logout', (req, res) => {
-  res.clearCookie('token');
+  // Must match the options the cookie was set with, or some browsers keep it
+  res.clearCookie('token', { ...COOKIE_OPTIONS, maxAge: undefined });
   res.json({ message: 'Logout successful' });
 });
 

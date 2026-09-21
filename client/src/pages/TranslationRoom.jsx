@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { SOCKET_URL } from '../services/socket';
 import RecordRTC, { StereoAudioRecorder } from 'recordrtc';
 import { Mic, MicOff, Volume2, VolumeX, MessageSquare, AlertTriangle, ExternalLink } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -36,6 +37,9 @@ const TranslationRoom = () => {
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const transcriptEndRef = useRef(null);
+  // The socket handler below is registered once; read the latest toggle via a ref
+  const playbackRef = useRef(playbackEnabled);
+  useEffect(() => { playbackRef.current = playbackEnabled; }, [playbackEnabled]);
 
   // Scroll to bottom when transcripts update
   useEffect(() => {
@@ -44,8 +48,7 @@ const TranslationRoom = () => {
 
   // Socket initialization
   useEffect(() => {
-    const socketUrl = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
-    const newSocket = io(`${socketUrl}/translation`, {
+    const newSocket = io(`${SOCKET_URL}/translation`, {
       withCredentials: true
     });
     
@@ -67,7 +70,7 @@ const TranslationRoom = () => {
       setTranscripts(prev => [...prev, payload]);
       
       // Play audio if enabled and it's not my own speech
-      if (playbackEnabled && payload.role !== role && payload.audioUrl) {
+      if (playbackRef.current && payload.role !== role && payload.audioUrl) {
         const audio = new Audio(payload.audioUrl);
         audio.play().catch(e => console.error('Audio playback failed:', e));
       }
@@ -80,7 +83,12 @@ const TranslationRoom = () => {
     setSocket(newSocket);
 
     return () => {
-      if (isRecording) stopRecording();
+      // `isRecording` would be stale here; the refs always reflect the live state
+      if (recorderRef.current) {
+        try { recorderRef.current.stopRecording(); } catch { /* already stopped */ }
+        recorderRef.current = null;
+      }
+      streamRef.current?.getTracks().forEach(track => track.stop());
       newSocket.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

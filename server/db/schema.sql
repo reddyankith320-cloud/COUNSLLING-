@@ -1,11 +1,11 @@
--- Telugu Counseling Services Database Schema
+-- Find My Peace – Database Schema (idempotent: safe to re-run via `npm run seed`)
 -- PostgreSQL
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Admin users (counselors)
-CREATE TABLE admins (
+CREATE TABLE IF NOT EXISTS admins (
     id SERIAL PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE admins (
 );
 
 -- Clients
-CREATE TABLE clients (
+CREATE TABLE IF NOT EXISTS clients (
     id SERIAL PRIMARY KEY,
     full_name VARCHAR(255) NOT NULL,
     age INTEGER NOT NULL CHECK (age > 0 AND age < 150),
@@ -29,7 +29,7 @@ CREATE TABLE clients (
 );
 
 -- Holidays
-CREATE TABLE holidays (
+CREATE TABLE IF NOT EXISTS holidays (
     id SERIAL PRIMARY KEY,
     date DATE UNIQUE NOT NULL,
     reason VARCHAR(255),
@@ -37,7 +37,7 @@ CREATE TABLE holidays (
 );
 
 -- Blocked Dates (full day block)
-CREATE TABLE blocked_dates (
+CREATE TABLE IF NOT EXISTS blocked_dates (
     id SERIAL PRIMARY KEY,
     date DATE UNIQUE NOT NULL,
     reason VARCHAR(255),
@@ -45,7 +45,7 @@ CREATE TABLE blocked_dates (
 );
 
 -- Blocked Slots (individual time slot block)
-CREATE TABLE blocked_slots (
+CREATE TABLE IF NOT EXISTS blocked_slots (
     id SERIAL PRIMARY KEY,
     date DATE NOT NULL,
     start_time TIME NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE blocked_slots (
 );
 
 -- Appointments
-CREATE TABLE appointments (
+CREATE TABLE IF NOT EXISTS appointments (
     id SERIAL PRIMARY KEY,
     client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
     appointment_date DATE NOT NULL,
@@ -69,13 +69,14 @@ CREATE TABLE appointments (
     problem_description TEXT,
     requires_followup BOOLEAN,
     is_followup BOOLEAN DEFAULT FALSE,
+    consultation_type VARCHAR(50),
     parent_appointment_id INTEGER REFERENCES appointments(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Payments
-CREATE TABLE payments (
+CREATE TABLE IF NOT EXISTS payments (
     id SERIAL PRIMARY KEY,
     appointment_id INTEGER REFERENCES appointments(id) ON DELETE CASCADE,
     client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
@@ -93,7 +94,7 @@ CREATE TABLE payments (
 );
 
 -- Counselor notes (private, visible only to the counselor)
-CREATE TABLE notes (
+CREATE TABLE IF NOT EXISTS notes (
     id SERIAL PRIMARY KEY,
     appointment_id INTEGER REFERENCES appointments(id) ON DELETE CASCADE,
     client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
@@ -103,7 +104,7 @@ CREATE TABLE notes (
 );
 
 -- Transcripts (Real-time translation transcripts)
-CREATE TABLE transcripts (
+CREATE TABLE IF NOT EXISTS transcripts (
     id SERIAL PRIMARY KEY,
     appointment_id INTEGER REFERENCES appointments(id) ON DELETE CASCADE,
     speaker VARCHAR(50) NOT NULL,
@@ -115,7 +116,7 @@ CREATE TABLE transcripts (
 );
 
 -- Settings (Admin controls)
-CREATE TABLE settings (
+CREATE TABLE IF NOT EXISTS settings (
     id SERIAL PRIMARY KEY,
     key VARCHAR(100) UNIQUE NOT NULL,
     value TEXT NOT NULL
@@ -125,12 +126,12 @@ CREATE TABLE settings (
 INSERT INTO settings (key, value) VALUES ('store_transcripts', 'true') ON CONFLICT (key) DO NOTHING;
 
 -- Indexes for performance
-CREATE INDEX idx_appointments_date ON appointments(appointment_date);
-CREATE UNIQUE INDEX idx_unique_booked_slot ON appointments(appointment_date, start_time) WHERE status IN ('Booked', 'Completed');
-CREATE INDEX idx_appointments_status ON appointments(status);
-CREATE INDEX idx_appointments_client ON appointments(client_id);
-CREATE INDEX idx_payments_status ON payments(status);
-CREATE INDEX idx_payments_client ON payments(client_id);
-CREATE INDEX idx_payments_razorpay_order ON payments(razorpay_order_id);
-CREATE INDEX idx_clients_email ON clients(email);
-CREATE INDEX idx_clients_mobile ON clients(mobile);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_booked_slot ON appointments(appointment_date, start_time) WHERE status IN ('Booked', 'Completed');
+CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
+CREATE INDEX IF NOT EXISTS idx_appointments_client ON appointments(client_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id);
+CREATE INDEX IF NOT EXISTS idx_payments_razorpay_order ON payments(razorpay_order_id);
+CREATE INDEX IF NOT EXISTS idx_clients_email ON clients(email);
+CREATE INDEX IF NOT EXISTS idx_clients_mobile ON clients(mobile);
