@@ -99,7 +99,12 @@ router.get('/appointments', async (req, res, next) => {
               p.status as payment_status, p.amount as payment_amount
        FROM appointments a
        JOIN clients c ON a.client_id = c.id
-       LEFT JOIN payments p ON a.id = p.appointment_id AND p.is_followup = FALSE
+       LEFT JOIN LATERAL (
+         SELECT status, amount FROM payments
+          WHERE appointment_id = a.id
+          ORDER BY (status = 'completed') DESC, created_at DESC
+          LIMIT 1
+       ) p ON TRUE
        ${whereClause}
        ORDER BY a.appointment_date DESC
        LIMIT $${limitParam} OFFSET $${offsetParam}`,
@@ -325,7 +330,12 @@ router.get('/clients/:id', async (req, res, next) => {
     const appointmentsResult = await query(
       `SELECT a.*, p.status as payment_status, p.amount
        FROM appointments a
-       LEFT JOIN payments p ON a.id = p.appointment_id AND p.is_followup = FALSE
+       LEFT JOIN LATERAL (
+         SELECT status, amount FROM payments
+          WHERE appointment_id = a.id
+          ORDER BY (status = 'completed') DESC, created_at DESC
+          LIMIT 1
+       ) p ON TRUE
        WHERE a.client_id = $1
        ORDER BY a.appointment_date DESC`,
       [id]

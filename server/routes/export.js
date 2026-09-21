@@ -40,7 +40,12 @@ router.get('/excel', async (req, res, next) => {
               p.amount, p.status as payment_status, p.created_at as payment_date
        FROM appointments a
        JOIN clients c ON a.client_id = c.id
-       LEFT JOIN payments p ON a.id = p.appointment_id AND p.is_followup = FALSE
+       LEFT JOIN LATERAL (
+         SELECT status, amount, created_at FROM payments
+          WHERE appointment_id = a.id
+          ORDER BY (status = 'completed') DESC, created_at DESC
+          LIMIT 1
+       ) p ON TRUE
        ${whereClause}
        ORDER BY a.appointment_date DESC, a.start_time ASC`,
       params
@@ -79,7 +84,12 @@ router.get('/pdf', async (req, res, next) => {
               p.amount, p.status as payment_status
        FROM appointments a
        JOIN clients c ON a.client_id = c.id
-       LEFT JOIN payments p ON a.id = p.appointment_id AND p.is_followup = FALSE
+       LEFT JOIN LATERAL (
+         SELECT status, amount FROM payments
+          WHERE appointment_id = a.id
+          ORDER BY (status = 'completed') DESC, created_at DESC
+          LIMIT 1
+       ) p ON TRUE
        ${whereClause}
        ORDER BY a.appointment_date DESC, a.start_time ASC`,
       params
