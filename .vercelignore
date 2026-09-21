@@ -1,0 +1,11 @@
+# Never upload local secrets/config — Vercel env vars are the source of truth
+.env
+.env.*
+!.env.example
+# Not needed for the frontend build
+server
+node_modules
+client/node_modules
+client/dist
+.git
+.claude

@@ -34,3 +34,7 @@ Thumbs.db
 # Temporary utility scripts
 fix.js
 
+
+# Vercel CLI
+.vercel
+.env.local
