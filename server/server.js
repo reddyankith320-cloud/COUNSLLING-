@@ -29,6 +29,13 @@ const { setupTranslationSockets } = require('./sockets/translation');
 const app = express();
 const server = http.createServer(app);
 
+// Hosted platforms (Render, Railway, Heroku…) sit behind a reverse proxy.
+// Without this, express-rate-limit rejects every request that carries an
+// X-Forwarded-For header and secure cookies are never set.
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 // FRONTEND_URL may be a comma-separated list (e.g. local + production)
 const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
   .split(',')
@@ -133,8 +140,17 @@ app.get('/api/auth/google/callback', async (req, res) => {
     if (!code) {
       return res.status(400).send('No code provided');
     }
-    await storeTokenFromCode(code);
-    res.send('✅ Google Calendar connected successfully. You can close this window.');
+    const tokens = await storeTokenFromCode(code);
+    // Only the authenticated admin who started this flow (valid `state`) reaches here.
+    const envHint = tokens.refresh_token
+      ? `<p>If this server runs on a host without persistent disk (Render, Railway, …), add this environment variable so the connection survives redeploys:</p>
+         <pre style="background:#f1f5f9;padding:12px;border-radius:8px;overflow:auto">GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}</pre>`
+      : '<p>No refresh token was returned (Google only issues it on the first consent). Remove the app from your Google account permissions and connect again if needed.</p>';
+    res.send(`<!doctype html><html><body style="font-family:system-ui;max-width:640px;margin:48px auto;line-height:1.5">
+      <h2>✅ Google Calendar connected</h2>
+      <p>Meet links will now be generated for new bookings. You can close this window.</p>
+      ${envHint}
+    </body></html>`);
   } catch (error) {
     console.error('Google OAuth error:', error);
     res.status(500).send('Google OAuth failed');
@@ -163,10 +179,25 @@ app.use('/api/*', (req, res) => {
 app.use(errorHandler);
 
 // ===== Start Server =====
-server.listen(PORT, () => {
-  console.log(`\n🚀 Find My Peace – Counseling API Server running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🌐 Allowed origins: ${allowedOrigins.join(', ')}\n`);
-});
+const { initDatabase } = require('./db/init');
+
+async function start() {
+  try {
+    const admin = await initDatabase();
+    console.log(`🗄️  Database ready${admin.created ? ` — admin account created (${admin.email})` : ''}`);
+  } catch (err) {
+    // Don't refuse to boot: the health check should still answer and the
+    // error is visible in the logs. Requests that need the DB will fail loudly.
+    console.error('❌ Database initialisation failed:', err.message);
+  }
+
+  server.listen(PORT, () => {
+    console.log(`\n🚀 Find My Peace – Counseling API Server running on port ${PORT}`);
+    console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🌐 Allowed origins: ${allowedOrigins.join(', ')}\n`);
+  });
+}
+
+start();
 
 module.exports = server;

@@ -37,30 +37,53 @@ function getAuthUrl(state) {
 async function storeTokenFromCode(code) {
   const oAuth2Client = createOAuth2Client();
   const { tokens } = await oAuth2Client.getToken(code);
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
-  console.log('✅ Google OAuth tokens stored successfully.');
+  try {
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+    console.log('✅ Google OAuth tokens stored successfully.');
+  } catch (err) {
+    // Read-only filesystem on some hosts — the refresh token still works via env var
+    console.warn('⚠️ Could not write .google-token.json:', err.message);
+  }
   return tokens;
+}
+
+/**
+ * Load stored tokens. Hosted platforms (Render, Railway…) wipe the disk on
+ * every deploy, so a GOOGLE_REFRESH_TOKEN env var takes precedence over the
+ * local token file.
+ */
+function loadStoredTokens() {
+  if (process.env.GOOGLE_REFRESH_TOKEN) {
+    return { refresh_token: process.env.GOOGLE_REFRESH_TOKEN };
+  }
+  if (fs.existsSync(TOKEN_PATH)) {
+    return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+  }
+  return null;
 }
 
 /**
  * Get an authenticated OAuth2 client, auto-refreshing tokens if needed
  */
 async function getAuthenticatedClient() {
-  const oAuth2Client = createOAuth2Client();
-
-  if (!fs.existsSync(TOKEN_PATH)) {
+  const tokens = loadStoredTokens();
+  if (!tokens) {
     return null; // Not yet authorized — needs one-time consent
   }
 
-  const tokens = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+  const oAuth2Client = createOAuth2Client();
   oAuth2Client.setCredentials(tokens);
 
-  // Auto-refresh: listen for new tokens and persist them
+  // Auto-refresh: persist rotated tokens when we have a writable token file
   oAuth2Client.on('tokens', (newTokens) => {
-    const existing = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
-    const merged = { ...existing, ...newTokens };
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(merged, null, 2));
-    console.log('🔄 Google OAuth tokens refreshed and stored.');
+    if (process.env.GOOGLE_REFRESH_TOKEN) return; // env-var mode: nothing to persist
+    try {
+      const existing = fs.existsSync(TOKEN_PATH) ? JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8')) : {};
+      fs.writeFileSync(TOKEN_PATH, JSON.stringify({ ...existing, ...newTokens }, null, 2));
+      console.log('🔄 Google OAuth tokens refreshed and stored.');
+    } catch (err) {
+      console.warn('⚠️ Could not persist refreshed Google tokens:', err.message);
+    }
   });
 
   return oAuth2Client;

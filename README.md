@@ -91,6 +91,28 @@ The seed script creates a default admin account from `ADMIN_EMAIL` / `ADMIN_PASS
 ## Pricing
 Fees are defined in `server/routes/booking.js` (`INITIAL_FEE`, `FOLLOWUP_FEE`, `MAX_FOLLOWUPS`) and mirrored for display in `client/src/config/site.js`. Change both when updating prices.
 
+## Deployment (free tier)
+
+The frontend and API are deployed separately. Both read their settings from environment variables — no code changes needed.
+
+### 1. API + database on Render
+1. Push this repo to GitHub, then in [Render](https://dashboard.render.com) choose **New → Blueprint** and select the repo. Render reads `render.yaml` and creates the `findmypeace-api` web service plus a free PostgreSQL database.
+2. Fill in the prompted secrets (Razorpay keys, Google OAuth client, Twilio/SendGrid if you use them, `ADMIN_EMAIL` / `ADMIN_PASSWORD`). Leave `FRONTEND_URL` as a placeholder for now.
+3. Deploy. On first start the API creates the schema and the admin account automatically. Your API URL looks like `https://findmypeace-api.onrender.com` — check `/api/health`.
+
+### 2. Frontend on Vercel
+1. In [Vercel](https://vercel.com/new) import the same GitHub repo. Set **Root Directory** to `client` (framework: Vite).
+2. Add environment variables: `VITE_API_BASE_URL` = your Render API URL, `VITE_RAZORPAY_KEY_ID` = your Razorpay key id.
+3. Deploy. Your site URL looks like `https://<project>.vercel.app`.
+
+### 3. Connect the two
+1. In Render, set `FRONTEND_URL` to the Vercel URL (comma-separate several if you add a custom domain) and redeploy.
+2. In Google Cloud Console, add `https://<render-host>/api/auth/google/callback` as an authorised redirect URI and set the same value as `GOOGLE_REDIRECT_URI` in Render.
+3. Log in to `/admin/login` on the live site, then open `https://<render-host>/api/auth/google` in the same browser to connect Google Calendar. Copy the `GOOGLE_REFRESH_TOKEN` it shows into Render's environment so Meet links keep working after redeploys.
+4. In the Razorpay dashboard add a webhook pointing at `https://<render-host>/api/payments/webhook` with the same secret as `RAZORPAY_WEBHOOK_SECRET`.
+
+Note: Render's free web service sleeps after 15 minutes without traffic; the first request afterwards takes ~30 s. Upgrade the plan to avoid this.
+
 ## Security Implementations
 * **Helmet.js**: Sets secure HTTP headers (CSP, HSTS).
 * **CORS**: Configured strictly for the frontend domain.
