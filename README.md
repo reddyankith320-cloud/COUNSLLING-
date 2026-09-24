@@ -37,7 +37,7 @@ A full-stack web application for a professional counseling practice, featuring i
   * Google Calendar API (Google Meet links – one-time OAuth consent from the admin)
   * Google Cloud Speech / Translate / Text-to-Speech (live translation room)
   * Twilio (SMS & WhatsApp Business API)
-  * SendGrid (Email Notifications)
+  * Resend (Transactional Email — customer confirmation + counselor notification)
 
 ## Local Development Setup
 
@@ -60,7 +60,7 @@ Copy `.env.example` to `server/.env` and fill in your keys:
 * Razorpay Key ID, Secret and Webhook Secret
 * Google OAuth Client ID / Secret (Calendar + Meet)
 * Twilio SID and Auth Token (optional – mocked when absent)
-* SendGrid API Key (optional – mocked when absent)
+* Resend API Key + verified sender domain (optional – mocked when absent)
 * `FRONTEND_URL` – comma-separated list of allowed origins
 
 Copy `client/.env.example` to `client/.env`. Leave `VITE_API_BASE_URL` empty in development (Vite proxies `/api`); set it to your API host in production.
@@ -97,7 +97,7 @@ The frontend and API are deployed separately. Both read their settings from envi
 
 ### 1. API + database on Render
 1. Push this repo to GitHub, then in [Render](https://dashboard.render.com) choose **New → Blueprint** and select the repo. Render reads `render.yaml` and creates the `findmypeace-api` web service plus a free PostgreSQL database.
-2. Fill in the prompted secrets (Razorpay keys, Google OAuth client, Twilio/SendGrid if you use them, `ADMIN_EMAIL` / `ADMIN_PASSWORD`). Leave `FRONTEND_URL` as a placeholder for now.
+2. Fill in the prompted secrets (Razorpay keys, Google OAuth client, Resend key, Twilio if you use them, `ADMIN_EMAIL` / `ADMIN_PASSWORD`). Leave `FRONTEND_URL` as a placeholder for now.
 3. Deploy. On first start the API creates the schema and the admin account automatically. Your API URL looks like `https://findmypeace-api.onrender.com` — check `/api/health`.
 
 ### 2. Frontend on Vercel

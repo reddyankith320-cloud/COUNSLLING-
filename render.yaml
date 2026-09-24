@@ -43,12 +43,12 @@ services:
       # Paste the value shown after connecting Google Calendar from the admin panel
       - key: GOOGLE_REFRESH_TOKEN
         sync: false
-      - key: SENDGRID_API_KEY
+      - key: RESEND_API_KEY
         sync: false
-      - key: SENDGRID_FROM_EMAIL
+      - key: RESEND_FROM_EMAIL
+        value: Find My Peace <noreply@findmypeace.in>
+      - key: COUNSELOR_NOTIFY_EMAIL
         sync: false
-      - key: SENDGRID_FROM_NAME
-        value: Find My Peace
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN

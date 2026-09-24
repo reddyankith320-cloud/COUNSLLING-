@@ -122,6 +122,8 @@ router.post("/verify", paymentLimiter, async (req, res, next) => {
       mobile: appointment.mobile,
       date: dateStr,
       time: timeStr,
+      consultationType: appointment.consultation_type,
+      problemDescription: appointment.problem_description,
       meetLink: meetMeeting.meetLink,
       meetingId: meetMeeting.eventId,
       startTime: startTimeStr,
@@ -129,7 +131,8 @@ router.post("/verify", paymentLimiter, async (req, res, next) => {
     };
 
     Promise.allSettled([
-      emailService.sendBookingConfirmation(notifications),
+      emailService.sendBookingConfirmation(notifications),          // flow 1: customer
+      emailService.sendBookingNotificationToCounselor(notifications), // flow 2: company
       smsService.sendBookingConfirmation(notifications),
       whatsappService.sendBookingConfirmation(notifications),
     ]).then(results => {
