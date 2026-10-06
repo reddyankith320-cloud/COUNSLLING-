@@ -145,6 +145,43 @@ class TestSplits:
         with pytest.raises(ValueError, match="warm-up"):
             build_splits(features, labels, Config())
 
+    def test_negative_keep_rate_reaches_the_sampler(self):
+        """A changed keep rate must change the training set.
+
+        Negative subsampling happens here, while the index arrays are built -
+        not at training time. A caller that builds the splits once and then
+        edits ``cfg.windows.negative_keep_rate`` is silently training on the
+        original composition, which is exactly how a sweep ends up reporting
+        one configuration twice under two names.
+        """
+        grid, features, labels = self._prepared_bits()
+
+        sizes = {}
+        for rate in (0.08, 0.25, 1.0):
+            cfg = Config()
+            cfg.windows.negative_keep_rate = rate
+            sizes[rate] = len(build_splits(features, labels, cfg).train)
+
+        assert sizes[0.08] < sizes[0.25] < sizes[1.0], sizes
+        # Roughly proportional in the negatives, which dominate at this base
+        # rate; loose bounds because the positives are kept in full.
+        assert 2.5 < sizes[0.25] / sizes[0.08] < 3.7, sizes
+
+    def test_subsampling_never_touches_validation_or_test(self):
+        """Only training is resampled, so held-out metrics stay comparable."""
+        grid, features, labels = self._prepared_bits()
+
+        reference = None
+        for rate in (0.08, 0.25, 1.0):
+            cfg = Config()
+            cfg.windows.negative_keep_rate = rate
+            splits = build_splits(features, labels, cfg)
+            if reference is None:
+                reference = (splits.val, splits.test)
+                continue
+            np.testing.assert_array_equal(splits.val, reference[0])
+            np.testing.assert_array_equal(splits.test, reference[1])
+
     def test_negative_subsampling_keeps_every_positive(self):
         index = np.array([[i, 0] for i in range(1000)], dtype=np.int32)
         labels = np.zeros((1000, 1), dtype=np.float32)

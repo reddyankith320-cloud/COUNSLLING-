@@ -8,9 +8,13 @@ the training-set composition, whether a seed-ensemble beats a single model,
 and the operating threshold. The test split is read exactly once, at the
 end, with all of that frozen.
 
-The dataset is built once and reused across configurations, so the
-comparison is on identical splits and the cost is one feature build rather
-than one per run.
+Model- and train-level parameters (width, depth, dropout, learning rate,
+loss, seed) are read after the windows are fixed, so every candidate that
+only moves those shares one dataset build. Window-level parameters
+(``sequence_steps``, ``negative_keep_rate``) decide which windows exist and
+which negatives survive subsampling, so a candidate that moves either one
+gets its own build - reusing the shared one would silently evaluate the base
+configuration under the candidate's name.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -65,10 +69,19 @@ class Candidate:
         out.windows.seed = base_seed
         return out
 
+    def window_key(self) -> tuple[int, float]:
+        """The dataset build this candidate needs.
 
-#: The sweep. Sequence length is held at 36 steps for the main comparison so
-#: every configuration sees identical splits (the embargo is derived from it),
-#: with one longer-window run reported separately.
+        Two candidates with the same key can share a build; two with
+        different keys cannot, because these are the parameters consumed
+        while the window index arrays are constructed.
+        """
+        return (self.sequence_steps, self.negative_keep_rate)
+
+
+#: The sweep. Sequence length is held at 36 steps for most of the comparison
+#: so those candidates share identical splits (the embargo is derived from
+#: it), with one longer-window run reported separately.
 CANDIDATES = [
     Candidate("baseline_h64", note="the shipped configuration"),
     Candidate("wide_h128", hidden_size=128, dropout=0.30, note="more capacity"),
@@ -96,6 +109,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ensemble-seeds", type=int, default=3,
                    help="seed-average the winner; 1 disables")
     p.add_argument("--skip-long-window", action="store_true")
+    p.add_argument("--only", default="",
+                   help="comma-separated candidate names to run, for reruns")
+    p.add_argument("--merge", action="store_true",
+                   help="replace same-named rows in an existing validation "
+                        "table instead of overwriting it, then re-pick the best")
+    p.add_argument("--note", default="",
+                   help="recorded in the table's notes, e.g. why a rerun happened")
     p.add_argument("--outdir", default="artifacts/lstm_sweep")
     p.add_argument("--results", default="results")
     return p.parse_args()
@@ -161,6 +181,10 @@ def score_validation(prepared, cfg: Config, probs: np.ndarray) -> dict:
     }
 
 
+def describe_build(key: tuple[int, float]) -> str:
+    return f"sequence {key[0]} steps, negative_keep_rate {key[1]}"
+
+
 def main() -> int:
     args = parse_args()
     outdir = Path(args.outdir)
@@ -177,25 +201,54 @@ def main() -> int:
     base.train.seed = args.seed
     base.windows.seed = args.seed
 
+    schedule = list(CANDIDATES)
+    if not args.skip_long_window:
+        schedule.append(LONG_WINDOW)
+    if args.only:
+        wanted = {n.strip() for n in args.only.split(",") if n.strip()}
+        unknown = wanted - {c.name for c in schedule}
+        if unknown:
+            raise SystemExit(f"unknown candidate(s): {sorted(unknown)}")
+        schedule = [c for c in schedule if c.name in wanted]
+
+    base_key = (base.windows.sequence_steps, base.windows.negative_keep_rate)
+    shared: dict[tuple[int, float], object] = {}
+
+    def prepared_for(cfg: Config, key: tuple[int, float]):
+        """Dataset for one window configuration, built on demand.
+
+        Only the shared build is cached; a candidate-specific one is handed
+        back uncached and freed by the caller, because each build holds the
+        full feature matrix.
+        """
+        if key in shared:
+            return shared[key]
+        print(f"[sweep] building windows ({describe_build(key)})...")
+        t = time.time()
+        prepared = build(cfg, args)
+        print(f"        {time.time() - t:.0f}s | "
+              f"{json.dumps(prepared.labels.summary())}")
+        if key == base_key:
+            shared[key] = prepared
+        return prepared
+
     print(
         f"[sweep] SYNTHETIC benchmark, fresh seed {args.seed} "
         f"({args.days} days x {args.stations} stations). "
         "data.gov.sg is unreachable, so real data cannot be used."
     )
-    print("[sweep] building the dataset once (sequence 36)...")
-    t0 = time.time()
-    prepared36 = build(base, args)
-    print(f"        {time.time() - t0:.0f}s | {json.dumps(prepared36.labels.summary())}")
 
     rows: list[dict] = []
     best = None
 
-    for candidate in CANDIDATES:
+    for candidate in schedule:
         cfg = candidate.apply(base, args.seed)
+        key = candidate.window_key()
         print(f"\n[sweep] {candidate.name}: {candidate.note}")
+        prepared = prepared_for(cfg, key)
         started = time.time()
-        model, probs, result = train_one(prepared36, cfg, outdir, candidate.name)
-        scores = score_validation(prepared36, cfg, probs)
+        model, probs, result = train_one(prepared, cfg, outdir, candidate.name)
+        scores = score_validation(prepared, cfg, probs)
         row = {
             "name": candidate.name,
             "note": candidate.note,
@@ -210,8 +263,21 @@ def main() -> int:
             "n_parameters": int(model.n_parameters()),
             "best_epoch": int(result.best_epoch),
             "minutes": round((time.time() - started) / 60.0, 1),
+            "own_dataset_build": key != base_key,
             **scores,
         }
+        if key[0] != base_key[0]:
+            row["caveat"] = (
+                "sequence length differs, so the embargo and therefore the "
+                "validation index set differ slightly from the other rows "
+                "(<0.02% of validation samples)"
+            )
+        elif key[1] != base_key[1]:
+            row["caveat"] = (
+                "training composition differs; the validation and test windows "
+                "are identical to the other rows, because negatives are "
+                "subsampled on training only"
+            )
         rows.append(row)
         print(
             f"        PR-AUC {row['pr_auc']:.4f} | ROC {row['roc_auc']:.4f} | "
@@ -220,60 +286,35 @@ def main() -> int:
         )
         if best is None or row["pr_auc"] > best["pr_auc"]:
             best = row
-
-    if not args.skip_long_window:
-        cfg = LONG_WINDOW.apply(base, args.seed)
-        print(f"\n[sweep] {LONG_WINDOW.name}: {LONG_WINDOW.note} (rebuilding splits)")
-        prepared72 = build(cfg, args)
-        started = time.time()
-        model, probs, result = train_one(prepared72, cfg, outdir, LONG_WINDOW.name)
-        scores = score_validation(prepared72, cfg, probs)
-        row = {
-            "name": LONG_WINDOW.name, "note": LONG_WINDOW.note,
-            "hidden_size": LONG_WINDOW.hidden_size,
-            "num_layers": LONG_WINDOW.num_layers,
-            "sequence_steps": 72,
-            "n_parameters": int(model.n_parameters()),
-            "best_epoch": int(result.best_epoch),
-            "minutes": round((time.time() - started) / 60.0, 1),
-            "caveat": (
-                "splits differ by 36 steps of embargo from the other rows "
-                "(<0.02% of validation samples)"
-            ),
-            **scores,
-        }
-        rows.append(row)
-        print(
-            f"        PR-AUC {row['pr_auc']:.4f} | ROC {row['roc_auc']:.4f} | "
-            f"event recall {row['event_recall']:.3f}"
-        )
-        if row["pr_auc"] > best["pr_auc"]:
-            best = row
-        del prepared72
+        if key != base_key:
+            del prepared
 
     print(f"\n[sweep] best single configuration on validation PR-AUC: "
           f"{best['name']} ({best['pr_auc']:.4f})")
 
     # Seed ensemble of the winner, accepted only if validation says it helps.
     winner = next(c for c in CANDIDATES + [LONG_WINDOW] if c.name == best["name"])
-    ensemble_row = None
-    if args.ensemble_seeds > 1 and winner.sequence_steps == 36:
+    if args.ensemble_seeds > 1:
+        key = winner.window_key()
         print(f"\n[sweep] seed-ensembling {winner.name} over "
               f"{args.ensemble_seeds} seeds")
+        prepared = prepared_for(winner.apply(base, args.seed), key)
         members = []
         for k in range(args.ensemble_seeds):
             member = Candidate(**{**winner.__dict__, "seed": k,
                                   "name": f"{winner.name}_s{k}"})
             cfg = member.apply(base, args.seed)
-            _, probs, _ = train_one(prepared36, cfg, outdir, member.name)
+            _, probs, _ = train_one(prepared, cfg, outdir, member.name)
             members.append(probs)
             print(f"        seed {k} trained")
         averaged = np.mean(members, axis=0)
-        scores = score_validation(prepared36, base, averaged)
+        scores = score_validation(prepared, winner.apply(base, args.seed), averaged)
         ensemble_row = {
             "name": f"{winner.name}_ensemble_x{args.ensemble_seeds}",
             "note": f"mean probability over {args.ensemble_seeds} seeds",
             "sequence_steps": winner.sequence_steps,
+            "negative_keep_rate": winner.negative_keep_rate,
+            "own_dataset_build": key != base_key,
             **scores,
         }
         rows.append(ensemble_row)
@@ -287,8 +328,26 @@ def main() -> int:
             print("        ensemble wins on validation")
         else:
             print("        ensemble does not beat the single model; keeping it")
+        if key != base_key:
+            del prepared
 
-    (results_dir / "lstm_sweep_validation.json").write_text(
+    out_path = results_dir / "lstm_sweep_validation.json"
+    notes: list[str] = []
+    if args.merge and out_path.exists():
+        previous = json.loads(out_path.read_text())
+        notes = list(previous.get("notes", []))
+        replaced = {r["name"] for r in rows}
+        kept = [r for r in previous.get("candidates", [])
+                if r["name"] not in replaced]
+        dropped = len(previous.get("candidates", [])) - len(kept)
+        rows = kept + rows
+        best = max(rows, key=lambda r: r["pr_auc"])
+        print(f"[sweep] merged: replaced {dropped} row(s), "
+              f"best is now {best['name']} ({best['pr_auc']:.4f})")
+    if args.note:
+        notes.append(args.note)
+
+    out_path.write_text(
         json.dumps(
             {
                 "data_source": (
@@ -298,12 +357,13 @@ def main() -> int:
                 "selection_metric": "validation PR-AUC",
                 "test_set_used": False,
                 "selected": best["name"],
+                "notes": notes,
                 "candidates": rows,
             },
             indent=2,
         )
     )
-    print(f"\n[sweep] validation table -> {results_dir}/lstm_sweep_validation.json")
+    print(f"\n[sweep] validation table -> {out_path}")
     print(f"[sweep] SELECTED: {best['name']}")
     (outdir / "selected.json").write_text(json.dumps(best, indent=2))
     return 0
