@@ -121,6 +121,7 @@ def explain_sample(
     top_k: int = 4,
     recent_minutes: int = 30,
     step_minutes: int = STEP_MINUTES,
+    band: str | None = None,
 ) -> Explanation:
     """Explain one scored sample.
 
@@ -128,6 +129,12 @@ def explain_sample(
         sequence: ``(L, F)`` scaled dynamic features for one station/time.
         static: ``(G,)`` scaled static features.
         top_k: how many factors to name.
+        band: the Flood Risk Score band being displayed beside this
+            explanation. Pass it so the sentence agrees with the panel:
+            the band comes from the blended score while the probability is
+            only one of its four terms, so a location can sit in the
+            Moderate band on a low probability. Without it the sentence
+            describes the probability and says so explicitly.
     """
     model.eval()
     seq = _as_tensor(sequence).unsqueeze(0).requires_grad_(True)
@@ -173,7 +180,9 @@ def explain_sample(
         attention=weights,
         attention_recent_share=recent_share,
         attention_peak_minutes_ago=peak_offset,
-        sentence=compose_sentence(probability, top, recent_share, recent_minutes),
+        sentence=compose_sentence(
+            probability, top, recent_share, recent_minutes, band=band
+        ),
     )
 
 
@@ -210,19 +219,25 @@ def compose_sentence(
     factors: list[Factor],
     recent_share: float,
     recent_minutes: int,
+    band: str | None = None,
 ) -> str:
     """Build the dashboard's explanation line from the top factors."""
     raising = [f for f in factors if f.direction == "raises"]
-    level = (
-        "High" if probability >= 0.50
-        else "Elevated" if probability >= 0.20
-        else "Low"
-    )
+
+    if band is not None:
+        lead = f"{band} risk band ({probability:.0%} modelled probability)"
+    else:
+        level = (
+            "high" if probability >= 0.50
+            else "elevated" if probability >= 0.20
+            else "low"
+        )
+        lead = f"Modelled probability is {level} ({probability:.0%})"
 
     if not raising:
         return (
-            f"{level} modelled risk. No single factor is pushing risk up right "
-            "now; the strongest signals are currently reducing it."
+            f"{lead}. No single factor is pushing risk up right now; the "
+            "strongest signals are currently reducing it."
         )
 
     phrases = [f.phrase for f in raising[:3]]
@@ -233,7 +248,7 @@ def compose_sentence(
     else:
         drivers = f"{phrases[0]}, {phrases[1]} and {phrases[2]}"
 
-    sentence = f"{level} modelled risk, driven mainly by {drivers}."
+    sentence = f"{lead}, driven mainly by {drivers}."
     if recent_share >= 0.5:
         sentence += (
             f" Most of the evidence ({recent_share * 100:.0f}% of the model's "

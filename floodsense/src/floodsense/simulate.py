@@ -56,6 +56,30 @@ class ScenarioResult:
         }
 
 
+#: Explains a non-monotone response, which is a real property of the model
+#: rather than a glitch in the simulator - see ``SimulationReport.caveat``.
+NON_MONOTONE_NOTE = (
+    "The model's probability did not rise monotonically with rainfall in "
+    "this scenario. Two reasons, both expected: steps where an alert was "
+    "already open are excluded from training, which truncates the training "
+    "distribution at the heaviest rainfall; and scaling rainfall beyond what "
+    "the record contains asks the network to extrapolate. Read this table as "
+    "sensitivity analysis, not as a dose-response curve."
+)
+
+
+def _direction(values: list[float], tol: float = 1e-9) -> str:
+    """Classify a sequence as increasing, decreasing, flat or mixed."""
+    if len(values) < 2:
+        return "flat"
+    diffs = np.diff(np.asarray(values, dtype=np.float64))
+    if np.all(diffs >= -tol):
+        return "increasing" if np.any(diffs > tol) else "flat"
+    if np.all(diffs <= tol):
+        return "decreasing"
+    return "mixed"
+
+
 @dataclass
 class SimulationReport:
     scenarios: list[ScenarioResult]
@@ -67,11 +91,34 @@ class SimulationReport:
         "heavier rainfall. Not a forecast, and not an official PUB warning."
     )
 
+    @property
+    def probability_direction(self) -> str:
+        return _direction([s.mean_probability for s in self.scenarios])
+
+    @property
+    def score_direction(self) -> str:
+        return _direction([float(s.risk_scores.mean()) for s in self.scenarios])
+
+    @property
+    def caveat(self) -> str | None:
+        """Set when the response is not monotonically increasing.
+
+        Surfaced rather than smoothed over: a simulator that quietly
+        presented a falling risk under heavier rainfall as if it were a
+        forecast would be worse than one that says it does not know.
+        """
+        if self.probability_direction in {"increasing", "flat"}:
+            return None
+        return NON_MONOTONE_NOTE
+
     def to_dict(self) -> dict:
         return {
             "scored_at": self.scored_at,
             "scaled_window_minutes": self.scaled_window_minutes,
             "scenarios": [s.to_dict() for s in self.scenarios],
+            "probability_direction": self.probability_direction,
+            "score_direction": self.score_direction,
+            "caveat": self.caveat,
             "disclaimer": self.disclaimer,
         }
 
@@ -87,6 +134,9 @@ class SimulationReport:
                 f"| {s.label} | {c['Low']} | {c['Moderate']} | {c['High']} | "
                 f"{c['Critical']} | {s.high_or_critical} |"
             )
+        if self.caveat:
+            rows.append("")
+            rows.append(f"_{self.caveat}_")
         return "\n".join(rows)
 
 

@@ -186,6 +186,7 @@ class FloodSenseService:
         t_end: int | None = None,
         sequences: np.ndarray | None = None,
         top_k: int = 4,
+        band: str | None = None,
     ) -> Explanation:
         """Explain one station's score."""
         t_end = grid.n_steps - 1 if t_end is None else int(t_end)
@@ -205,6 +206,7 @@ class FloodSenseService:
             sequences[index],
             static_scaled[index],
             top_k=top_k,
+            band=band,
         )
 
     def simulate(
@@ -253,7 +255,13 @@ class FloodSenseService:
 
         selected_id = str(table.iloc[0]["station_id"]) if len(table) else None
         explanation = (
-            self.explain(grid, selected_id, t_end, sequences=sequences)
+            self.explain(
+                grid,
+                selected_id,
+                t_end,
+                sequences=sequences,
+                band=str(table.iloc[0]["risk_band"]),
+            )
             if selected_id is not None
             else None
         )

@@ -69,11 +69,27 @@ class RiskScorer:
         cfg = cfg or RiskConfig()
 
         def reference(values: np.ndarray, percentile: float) -> float:
+            """Percentile over *raining* intervals only.
+
+            Taking it over every station-interval is wrong here, and wrong
+            in a way that quietly disables half the score: Singapore's
+            gauges read zero in roughly 97% of 5-minute intervals, so even
+            the 99th percentile of all cells is a light drizzle. Both
+            context terms would then saturate at 1.0 during any real storm
+            and could never rise again - which is exactly what made the
+            what-if simulator unable to move the score upward. Conditioning
+            on wet intervals gives a reference in the range of actual
+            rainfall.
+            """
             flat = np.asarray(values, dtype=np.float64).reshape(-1)
             flat = flat[np.isfinite(flat)]
-            if flat.size == 0:
+            wet = flat[flat > 0.0]
+            # Fall back to the full distribution only if almost nothing is
+            # wet, where a wet-only percentile would be pure noise.
+            sample = wet if wet.size >= 100 else flat
+            if sample.size == 0:
                 return 1.0
-            value = float(np.percentile(flat, percentile))
+            value = float(np.percentile(sample, percentile))
             return value if value > 1e-6 else 1.0
 
         vul = np.asarray(vulnerability, dtype=np.float64).reshape(-1)
@@ -93,6 +109,7 @@ class RiskScorer:
                 "intensity_percentile": cfg.intensity_reference_percentile,
                 "accumulation_percentile": cfg.accumulation_reference_percentile,
                 "n_intensity_samples": int(np.size(intensity)),
+                "percentiles_over": "raining intervals only",
             },
         )
 

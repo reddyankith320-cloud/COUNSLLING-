@@ -52,7 +52,7 @@ python scripts/train.py --source synthetic --days 400 --stations 32
 # Predict / explain / simulate against the trained run
 python scripts/demo.py --run artifacts/run --json dashboard.json
 
-# 135 tests, ~5 seconds
+# 153 tests, ~10 seconds
 python -m pytest tests/ -q
 ```
 
@@ -122,7 +122,7 @@ static (7 ch) ──────────────────► static M
 
 ---
 
-## Three findings worth your attention
+## Findings worth your attention
 
 ### 1. LayerNorm across the feature axis destroys the flood signal
 
@@ -147,7 +147,36 @@ event, one alarm burst — the same model catches ~91% of events at roughly
 **1.8 false alarms per station-day**, which is a number an operations team
 can actually argue about. Both views are reported; neither is hidden.
 
-### 3. A gradient-boosting baseline is competitive
+### 3. A percentile over *all* intervals disabled half the risk score
+
+The Flood Risk Score normalises its intensity and accumulation terms
+against percentiles of the training data. Taking those percentiles over
+every station-interval put the 99th percentile at **7.2 mm/h and 3.2 mm** —
+a drizzle — because Singapore's gauges read zero in roughly 97% of
+5-minute intervals. Both terms therefore saturated at 1.0 during any real
+storm and could never rise again, which is how it was found: the what-if
+simulator could not move the score upward.
+
+Conditioning the percentile on *raining* intervals puts the references at
+**67 mm/h and 19 mm**, which is the range of actual storms. Tested in
+`TestRiskScore::test_references_condition_on_wet_intervals`.
+
+### 4. The model's response to scaled rainfall is not monotone
+
+Doubling recent rainfall sometimes *lowers* the predicted probability. That
+is not a simulator bug, and it is not smoothed over. Two causes, both
+expected: steps where an alert is already open are excluded from training,
+which truncates the training distribution exactly at the heaviest
+rainfall; and scaling beyond what the record contains asks the network to
+extrapolate.
+
+So `SimulationReport` classifies the response direction and attaches a
+caveat when it is not monotonically increasing, which travels into the
+dashboard payload and the printed table. A simulator that presented a
+falling risk under heavier rainfall as if it were a forecast would be worse
+than one that says it does not know.
+
+### 5. A gradient-boosting baseline is competitive
 
 `gbm_window_summary` (gradient boosting on per-channel last/mean/max/slope
 over the window) is a genuinely strong competitor and in the first run it
@@ -268,18 +297,25 @@ attribution over the feature channels with the model's own attention
 weights, de-duplicates channels that map to the same human phrase, and
 composes a sentence:
 
-> *Elevated modelled risk, driven mainly by 30-minute rainfall
-> accumulation, the rate at which 30-minute rainfall is increasing and
-> rainfall at nearby stations over 30 minutes. Most of the evidence (74% of
-> the model's attention) is in the last 30 minutes, so the situation is
-> developing now.*
+> *High risk band (61% modelled probability), driven mainly by 30-minute
+> rainfall accumulation, the rate at which 30-minute rainfall is increasing
+> and rainfall at nearby stations over 30 minutes. Most of the evidence
+> (74% of the model's attention) is in the last 30 minutes, so the
+> situation is developing now.*
+
+The sentence leads with the **band shown beside it**, not with the
+probability. The band comes from the blended score while the probability is
+one of its four terms, so a location can sit in the Moderate band on a low
+probability — and an explanation that called that "low risk" would
+contradict the panel it sits in.
 
 Stated limit, carried in the payload: these are local first-order
 attributions of one model's output, not a hydrological causal claim, and
 correlated rainfall windows share credit arbitrarily.
 
 **SIMULATE** — `simulate.simulate()` scales rainfall over the recent window
-by ×1.25/1.5/2.0 and re-scores. The scaling is applied to the **raw
+by ×1.25/1.5/2.0 and re-scores, reporting the response direction and
+flagging a non-monotone one (finding 4). The scaling is applied to the **raw
 rainfall grid** and every derived feature is then recomputed from it.
 Scaling `acc_1h` directly while leaving `rate_30m` alone would produce a
 feature vector no real weather could generate, and the model's response to
@@ -347,7 +383,7 @@ src/floodsense/
   ingest/        historical CSVs, live APIs, flood-prone data, staging
 scripts/         train.py, demo.py, fetch_data.py
 notebooks/       Databricks medallion pipeline
-tests/           135 tests
+tests/           153 tests
 ```
 
 ---
@@ -368,6 +404,9 @@ tests/           135 tests
 - **No calibration step yet.** The Brier score is reported, but the
   probability is not isotonic- or Platt-calibrated, and the risk score
   consumes the probability directly.
+- **Scenario analysis is sensitivity, not dose-response** (finding 4). The
+  non-monotone region is reported rather than hidden, but it does limit how
+  the what-if panel should be read.
 - **The synthetic alert rate (3/station/month) is higher than reality**,
   chosen to make the pipeline trainable. A real base rate is lower, which
   makes the problem harder.

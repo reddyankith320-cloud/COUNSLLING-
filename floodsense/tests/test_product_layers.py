@@ -85,6 +85,50 @@ class TestRiskScore:
         assert "not an official" in text
         assert "not been validated" in text
 
+    def test_references_condition_on_wet_intervals(self):
+        """Dry intervals must not drag the reference down to a drizzle.
+
+        With ~97% of 5-minute intervals reading zero, a percentile over all
+        cells saturates both context terms during any real storm, which is
+        what stopped the what-if simulator from moving the score upward.
+        """
+        rng = np.random.default_rng(0)
+        wet = rng.gamma(2.0, 4.0, 2000)
+        dry = np.zeros(60_000)
+        mixed = np.concatenate([wet, dry])
+
+        s = RiskScorer.fit(
+            intensity=mixed, accumulation=mixed,
+            vulnerability=np.array([1.0]), cfg=RiskConfig(),
+        )
+        # Must land in the range of actual rainfall, not near zero.
+        assert s.intensity_reference > float(np.percentile(wet, 50))
+        assert s.intensity_reference == pytest.approx(
+            float(np.percentile(wet, 99)), rel=0.05
+        )
+
+    def test_unsaturated_reference_lets_the_score_respond(self):
+        """Below the reference, more rainfall must raise the score."""
+        rng = np.random.default_rng(1)
+        wet = rng.gamma(2.0, 4.0, 5000)
+        s = RiskScorer.fit(
+            intensity=np.concatenate([wet, np.zeros(50_000)]),
+            accumulation=np.concatenate([wet, np.zeros(50_000)]),
+            vulnerability=np.array([1.0]), cfg=RiskConfig(),
+        )
+        light = s.score(0.2, 1.0, 1.0, 0.5)
+        heavy = s.score(0.2, 2.0, 2.0, 0.5)
+        assert heavy > light
+
+    def test_mostly_dry_input_falls_back_to_the_full_distribution(self):
+        s = RiskScorer.fit(
+            intensity=np.concatenate([np.array([5.0] * 10), np.zeros(1000)]),
+            accumulation=np.zeros(1010),
+            vulnerability=np.array([1.0]),
+        )
+        assert np.isfinite(s.intensity_reference)
+        assert s.intensity_reference > 0.0
+
     def test_degenerate_references_do_not_divide_by_zero(self):
         s = RiskScorer.fit(
             intensity=np.zeros(10),
@@ -159,7 +203,34 @@ class TestExplain:
         factors = [Factor("acc_30m", PHRASES["acc_30m"], 1.0, "raises", "dynamic")]
         sentence = compose_sentence(0.8, factors, recent_share=0.9, recent_minutes=30)
         assert "last 30 minutes" in sentence
-        assert "High modelled risk" in sentence
+        assert "Modelled probability is high" in sentence
+
+    def test_sentence_leads_with_the_band_when_given(self):
+        """The sentence must agree with the band shown beside it.
+
+        The band comes from the blended Flood Risk Score; the probability
+        is one of its four terms. A location can sit in the Moderate band
+        on a low probability, and a sentence that called that "low risk"
+        would contradict the panel it sits in.
+        """
+        from floodsense.explain import Factor
+
+        factors = [Factor("acc_30m", PHRASES["acc_30m"], 1.0, "raises", "dynamic")]
+        sentence = compose_sentence(
+            0.16, factors, recent_share=0.2, recent_minutes=30, band="Moderate"
+        )
+        assert sentence.startswith("Moderate risk band")
+        assert "16% modelled probability" in sentence
+        assert "low" not in sentence.lower().split("driven")[0]
+
+    def test_band_is_threaded_through_explain_sample(self):
+        explanation = explain_sample(
+            self._model(),
+            np.zeros((12, 4), dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
+            band="Critical",
+        )
+        assert explanation.sentence.startswith("Critical risk band")
 
     def test_sentence_handles_no_upward_drivers(self):
         from floodsense.explain import Factor
@@ -311,3 +382,59 @@ class TestSimulate:
 def test_step_minutes_is_five():
     """Several window conversions assume the published 5-minute cadence."""
     assert STEP_MINUTES == 5
+
+
+class TestSimulationDirection:
+    """A non-monotone response must be surfaced, not smoothed over."""
+
+    def _report(self, probabilities: list[float]):
+        from floodsense.simulate import ScenarioResult, SimulationReport
+
+        scenarios = [
+            ScenarioResult(
+                factor=1.0 + 0.25 * i,
+                label=f"s{i}",
+                probabilities=np.full(3, p, dtype=np.float32),
+                risk_scores=np.full(3, 100.0 * p, dtype=np.float32),
+                bands=np.array(["Low"] * 3, dtype=object),
+                band_counts={"Low": 3, "Moderate": 0, "High": 0, "Critical": 0},
+                high_or_critical=0,
+                mean_probability=p,
+            )
+            for i, p in enumerate(probabilities)
+        ]
+        return SimulationReport(
+            scenarios=scenarios,
+            station_ids=np.array(["a", "b", "c"], dtype=object),
+            scaled_window_minutes=60,
+            scored_at="2026-10-06 14:35:00+08:00",
+        )
+
+    def test_increasing_response_has_no_caveat(self):
+        report = self._report([0.1, 0.2, 0.3, 0.4])
+        assert report.probability_direction == "increasing"
+        assert report.caveat is None
+        assert "dose-response" not in report.table()
+
+    def test_flat_response_has_no_caveat(self):
+        report = self._report([0.2, 0.2, 0.2])
+        assert report.probability_direction == "flat"
+        assert report.caveat is None
+
+    def test_decreasing_response_is_flagged(self):
+        report = self._report([0.4, 0.3, 0.2, 0.1])
+        assert report.probability_direction == "decreasing"
+        assert report.caveat is not None
+        assert "sensitivity analysis" in report.caveat
+        assert "dose-response" in report.table()
+
+    def test_mixed_response_is_flagged(self):
+        report = self._report([0.1, 0.4, 0.2, 0.5])
+        assert report.probability_direction == "mixed"
+        assert report.caveat is not None
+
+    def test_caveat_travels_in_the_payload(self):
+        payload = self._report([0.4, 0.1]).to_dict()
+        assert payload["probability_direction"] == "decreasing"
+        assert payload["caveat"] is not None
+        assert "Not a forecast" in payload["disclaimer"]

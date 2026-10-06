@@ -110,7 +110,10 @@ def main() -> int:
     print(f"\nBAND COUNTS  {counts}")
 
     top_station = str(table.iloc[0]["station_id"])
-    explanation = service.explain(grid, top_station, step, sequences=sequences)
+    explanation = service.explain(
+        grid, top_station, step, sequences=sequences,
+        band=str(table.iloc[0]["risk_band"]),
+    )
     print(f"\nEXPLANATION for {top_station}")
     print(f"  {explanation.sentence}")
     print(f"  probability: {explanation.probability:.4f}")
