@@ -111,6 +111,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-long-window", action="store_true")
     p.add_argument("--only", default="",
                    help="comma-separated candidate names to run, for reruns")
+    p.add_argument("--ensemble-only", action="store_true",
+                   help="skip the candidate loop and seed-ensemble a winner "
+                        "that is already trained, so a run that died before "
+                        "the ensemble can finish it without retraining")
+    p.add_argument("--winner", default="",
+                   help="with --ensemble-only, the candidate to ensemble; "
+                        "defaults to the name in <outdir>/selected.json")
     p.add_argument("--merge", action="store_true",
                    help="replace same-named rows in an existing validation "
                         "table instead of overwriting it, then re-pick the best")
@@ -211,6 +218,26 @@ def main() -> int:
             raise SystemExit(f"unknown candidate(s): {sorted(unknown)}")
         schedule = [c for c in schedule if c.name in wanted]
 
+    incumbent = None
+    if args.ensemble_only:
+        name = args.winner
+        if not name:
+            selected_path = outdir / "selected.json"
+            if not selected_path.exists():
+                raise SystemExit(
+                    f"--ensemble-only needs {selected_path} or --winner"
+                )
+            name = json.loads(selected_path.read_text())["name"]
+        incumbent = next(
+            (c for c in CANDIDATES + [LONG_WINDOW] if c.name == name), None
+        )
+        if incumbent is None:
+            raise SystemExit(f"{name} is not one of the sweep's candidates")
+        if not (outdir / name / "floodsense_lstm.pt").exists():
+            raise SystemExit(f"{name} has no trained checkpoint to ensemble")
+        schedule = []
+        print(f"[sweep] ensemble-only: winner is {name}")
+
     base_key = (base.windows.sequence_steps, base.windows.negative_keep_rate)
     shared: dict[tuple[int, float], object] = {}
 
@@ -289,11 +316,27 @@ def main() -> int:
         if key != base_key:
             del prepared
 
-    print(f"\n[sweep] best single configuration on validation PR-AUC: "
-          f"{best['name']} ({best['pr_auc']:.4f})")
+    if best is not None:
+        print(f"\n[sweep] best single configuration on validation PR-AUC: "
+              f"{best['name']} ({best['pr_auc']:.4f})")
 
     # Seed ensemble of the winner, accepted only if validation says it helps.
-    winner = next(c for c in CANDIDATES + [LONG_WINDOW] if c.name == best["name"])
+    if incumbent is not None:
+        winner = incumbent
+        table = results_dir / "lstm_sweep_validation.json"
+        if table.exists():
+            prior = [
+                r for r in json.loads(table.read_text()).get("candidates", [])
+                if r["name"] == winner.name
+            ]
+            if prior:
+                best = prior[0]
+                print(f"[sweep] {winner.name} to beat: "
+                      f"PR-AUC {best['pr_auc']:.4f}")
+    else:
+        winner = next(
+            c for c in CANDIDATES + [LONG_WINDOW] if c.name == best["name"]
+        )
     if args.ensemble_seeds > 1:
         key = winner.window_key()
         print(f"\n[sweep] seed-ensembling {winner.name} over "
@@ -323,11 +366,18 @@ def main() -> int:
             f"event recall {scores['event_recall']:.3f}"
         )
         np.save(outdir / "ensemble_val_probs.npy", averaged)
-        if scores["pr_auc"] > best["pr_auc"]:
+        if best is None:
             best = ensemble_row
-            print("        ensemble wins on validation")
+            print("        no single-model row to compare against; "
+                  "taking the ensemble")
+        elif scores["pr_auc"] > best["pr_auc"]:
+            print(f"        ensemble wins on validation "
+                  f"({scores['pr_auc']:.4f} > {best['pr_auc']:.4f})")
+            best = ensemble_row
         else:
-            print("        ensemble does not beat the single model; keeping it")
+            print(f"        ensemble does not beat the single model "
+                  f"({scores['pr_auc']:.4f} <= {best['pr_auc']:.4f}); "
+                  "keeping it")
         if key != base_key:
             del prepared
 
