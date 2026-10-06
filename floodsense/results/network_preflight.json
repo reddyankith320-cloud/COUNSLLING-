@@ -1,0 +1,84 @@
+{
+  "reachable": false,
+  "blocking_layer": "egress_policy",
+  "blocked_hosts": [
+    "api-open.data.gov.sg",
+    "data.gov.sg"
+  ],
+  "required_hosts": [
+    "api-open.data.gov.sg",
+    "data.gov.sg"
+  ],
+  "optional_hosts": [
+    "www.pub.gov.sg",
+    "pub.gov.sg"
+  ],
+  "remedy": "The environment's network policy refused the CONNECT tunnel for these hosts (HTTP 403 from the proxy, before TLS). Allow them in the environment's Network access settings - either a broader access level, or Custom with these under Allowed domains, keeping the default package-manager list:\n  api-open.data.gov.sg\n  data.gov.sg\nThen re-run this preflight. Nothing in FloodSense attempts to work around the policy.",
+  "probes": [
+    {
+      "layer": "dns",
+      "target": "api-open.data.gov.sg",
+      "ok": true,
+      "detail": "resolves to 104.20.45.103, 172.66.149.179, 2606:4700:10::6814:2d67",
+      "elapsed_ms": 21.666765213012695
+    },
+    {
+      "layer": "proxy",
+      "target": "api-open.data.gov.sg",
+      "ok": false,
+      "detail": "HTTP/1.1 403 Forbidden - request blocked: no rule or allowlist entry allows host \"api-open.data.gov.sg\"",
+      "elapsed_ms": 304.48365211486816
+    },
+    {
+      "layer": "dns",
+      "target": "data.gov.sg",
+      "ok": true,
+      "detail": "resolves to 104.20.45.103, 172.66.149.179, 2606:4700:10::6814:2d67",
+      "elapsed_ms": 15.986442565917969
+    },
+    {
+      "layer": "proxy",
+      "target": "data.gov.sg",
+      "ok": false,
+      "detail": "HTTP/1.1 403 Forbidden - request blocked: no rule or allowlist entry allows host \"data.gov.sg\"",
+      "elapsed_ms": 270.73073387145996
+    },
+    {
+      "layer": "dns",
+      "target": "www.pub.gov.sg",
+      "ok": true,
+      "detail": "resolves to 104.18.8.14, 104.18.9.14, 2606:4700::6812:80e",
+      "elapsed_ms": 15.622377395629883
+    },
+    {
+      "layer": "proxy",
+      "target": "www.pub.gov.sg",
+      "ok": false,
+      "detail": "HTTP/1.1 403 Forbidden - request blocked: no rule or allowlist entry allows host \"www.pub.gov.sg\"",
+      "elapsed_ms": 277.7247428894043
+    },
+    {
+      "layer": "dns",
+      "target": "pub.gov.sg",
+      "ok": false,
+      "detail": "resolution failed: [Errno -5] No address associated with hostname",
+      "elapsed_ms": 36.02242469787598
+    }
+  ],
+  "api_key_supplied": false,
+  "datasets": {
+    "realtime_rainfall": "d_6580738cdd7db79374ed3152159fbd69",
+    "flood_alerts": "d_f1404e08587ce555b9ea3f565e2eb9a3",
+    "flood_prone_areas": "d_c4aed98f1533eb3a66f65dbb1a30da46"
+  },
+  "documented_endpoints": {
+    "rainfall": "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
+  },
+  "flood_alert_endpoint": null,
+  "flood_alert_candidates": [
+    "https://api-open.data.gov.sg/v2/real-time/api/flood-alerts",
+    "https://api-open.data.gov.sg/v2/real-time/api/flood-alert",
+    "https://api-open.data.gov.sg/v2/real-time/api/floods"
+  ],
+  "flood_alert_endpoint_note": "Not asserted. The rainfall path is documented; the PUB flood-alerts path is not, so it is discovered by probing when the network is reachable. An invented path would 404 in a way that looks like 'no floods today'."
+}

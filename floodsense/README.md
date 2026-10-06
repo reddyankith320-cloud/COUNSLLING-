@@ -66,7 +66,7 @@ python scripts/train.py --source synthetic --days 400 --stations 32
 # Predict / explain / simulate against the trained run
 python scripts/demo.py --run artifacts/run --json dashboard.json
 
-# 239 tests, ~6 seconds
+# 280 tests, ~8 seconds
 python -m pytest tests/ -q
 ```
 
@@ -464,6 +464,43 @@ result). A synthetic run renders a warning banner driven by the
 The palette is the data-viz reference palette, validated by its checker in
 both light and dark mode; no dual axis anywhere.
 
+### LIVE and DEMO are never mixed
+
+The page resolves one dataset and says which:
+
+| badge | source file | shown as |
+| --- | --- | --- |
+| **LIVE / REAL DATA** | `results/real_data_metrics.json` | `DATA SOURCE: Singapore Government Open Data` |
+| **DEMO / SYNTHETIC DATA** | `results/final_metrics.json` | `DATA SOURCE: Synthetic Demo Dataset` |
+
+Real data is preferred when present; the two files are never merged. A file
+whose `synthetic_data` flag is true cannot be shown under the LIVE badge even
+if it is sitting at the real-data path, so a mislabelled file fails closed.
+
+### Distribution shift
+
+`scripts/distribution_report.py` profiles every split — event prevalence,
+rainfall distribution, event structure, station coverage, calendar months and
+monsoon composition — and warns when validation and test differ enough that
+an accuracy operating point will not transfer. On the synthetic run it says
+so explicitly:
+
+```
+split        period                     events  prevalence  wet share   mm/step
+train        2023-01-10 to 2024-01-16     1204     0.00213     0.0240   0.01515   negatives subsampled
+validation   2024-01-16 to 2024-04-05      326     0.00271     0.0269   0.01799
+test         2024-04-05 to 2024-06-23      159     0.00131     0.0175   0.01086
+
+  test_vs_validation_prevalence_ratio: 0.484
+  WARNING: Event prevalence differs by 0.48x between validation and test ...
+  WARNING: Northeast-monsoon share differs markedly between validation (95%) and test (0%)
+```
+
+That is the threshold-transfer failure of finding 7, visible *before* the
+test split is scored. Training prevalence is reported over the eligible
+region rather than as sampled, because the training split subsamples
+negatives and the raw figure would suggest a shift that is not in the data.
+
 ## Data sources
 
 All from [data.gov.sg](https://data.gov.sg), Open Data Licence.
@@ -501,28 +538,104 @@ feature.
 
 ## Running on real data
 
-```bash
-# 1. Stage the datasets (needs data.gov.sg reachable)
-python scripts/fetch_data.py --out data/ --realtime
-python scripts/fetch_data.py --out data/ --from 2026-09-01 --to 2026-09-30
-python scripts/fetch_data.py --out data/ --historical-dir ~/rainfall_csvs \
-    --flood-prone-points data/flood_prone_points.csv
+### Current status: the official hosts are blocked
 
-# 2. Train on it
-python scripts/train.py --source local --data-dir data/
+`scripts/network_preflight.py` diagnoses access layer by layer and stops at
+the first one that fails. On this environment:
+
+```
+Network preflight: BLOCKED
+  blocking layer : egress_policy
+  blocked hosts  : api-open.data.gov.sg, data.gov.sg
+  [ok ]  dns    api-open.data.gov.sg   resolves to 104.20.45.103, 172.66.149.179, ...
+  [FAIL] proxy  api-open.data.gov.sg   HTTP/1.1 403 Forbidden -
+         request blocked: no rule or allowlist entry allows host "api-open.data.gov.sg"
 ```
 
-Two caveats the code will tell you about rather than hide:
+DNS resolves and the proxy is reachable; the **CONNECT tunnel is refused with
+403 before TLS begins**, which is an egress-allowlist denial rather than a
+network fault, a certificate problem or an API error. The full report is in
+[`results/network_preflight.json`](results/network_preflight.json).
 
-- The **flood-alerts endpoint** is recent. `FLOOD_ALERTS_URL` in
-  `ingest/realtime.py` is a documented best guess; confirm it on the
-  dataset page. The parser accepts several field spellings and envelope
-  shapes (nested `location`, flat `lat`/`lon`, GeoJSON features) and
-  reports how many records it had to drop, instead of silently emitting
-  empty columns.
-- data.gov.sg rate-limits its real-time APIs; pass `--api-key`.
+**To enable real data, allow these hosts** in the environment's Network
+access settings (a broader access level, or Custom with these under Allowed
+domains, keeping the default package-manager list):
 
-### Databricks
+| host | why |
+| --- | --- |
+| `api-open.data.gov.sg` | real-time rainfall and PUB flood alerts (v2 API) |
+| `data.gov.sg` | dataset metadata, CKAN datastore, CSV downloads |
+| `www.pub.gov.sg` | *optional* — PUB's published flood-prone location list |
+
+Nothing in FloodSense attempts to work around the policy.
+
+### Endpoints and authentication
+
+Taken from the data.gov.sg developer guide, not invented:
+
+| | |
+| --- | --- |
+| real-time base | `https://api-open.data.gov.sg/v2/real-time/api` |
+| rainfall | `GET /v2/real-time/api/rainfall`, params `date` (`YYYY-MM-DD` or `YYYY-MM-DDTHH:mm:ss`) and `paginationToken` |
+| auth | `x-api-key` header |
+| rate limits | per 10 s on the v2 real-time API: 6 calls with no key, 12 with a dev key, 30 with a prod key; enforcement began 31 Dec 2025 |
+| flood alerts | **path not asserted** — discovered by probing, see below |
+
+A key is not strictly required, but at 6 calls per 10 seconds a multi-month
+backfill is impractical without one. Get one by signing in at data.gov.sg and
+pass it as `--api-key` or `DATAGOV_API_KEY`.
+
+**The flood-alerts endpoint is deliberately not hardcoded.** Its path is not
+documented in the material reachable from here, and an invented path would
+404 in a way that looks exactly like "no floods today" — silently producing a
+dataset with no positive class. `discover_flood_alert_endpoint` probes
+candidates and reports which one answers, or reports none.
+
+### Once the hosts are allowed
+
+```bash
+python scripts/network_preflight.py --discover          # expect "REACHABLE"
+python scripts/real_data_pipeline.py --fetch     --from 2025-11-01 --to 2026-09-30     --historical-dir ~/nea_rainfall_csvs     --flood-prone-points data/flood_prone_points.csv     --api-key "$DATAGOV_API_KEY"
+```
+
+That runs the whole chain — fetch, bronze, validation, silver, event
+matching, features, gold, chronological splits, model comparison on
+validation, threshold on validation, freeze, leakage audit, one test
+evaluation, distribution-shift report — and writes `results/real_*.json`.
+
+Two gates protect the output:
+
+**Preflight gate.** The pipeline aborts if the hosts are unreachable rather
+than quietly falling back to synthetic data.
+
+**Provenance gate.** `results/real_data_metrics.json` is written only when
+the staged data carries a `provenance.json` recording an official origin. A
+file with that name holding synthetic numbers is the single output most
+likely to mislead someone downstream, so it cannot be produced by accident.
+
+### Bronze → Silver validation
+
+Real gauge data is messy in ways synthetic data is not, so every table passes
+`floodsense.ingest.validate` before it reaches the feature code, and the
+report says what was dropped and why: negative depths, readings above 100 mm
+per 5 minutes (a gauge fault, not weather), unparseable timestamps,
+duplicate publications of a corrected reading, alerts without coordinates or
+outside Singapore's bounding box, alerts whose end precedes their start,
+readings from stations with no metadata. An empty alert table is an `ERROR`,
+not an empty pass — with no positive class there is nothing to learn.
+
+### The binding constraint on real data
+
+Not compute, and not the model: **label history**. PUB began publishing
+flood alerts by API in November 2025, so the alert archive available through
+the API is short, while rainfall history runs from 2016. A chronological
+train/validation/test split needs enough events in *every* split for the
+metrics to mean anything, and the validator warns when the alert span is
+under 180 days. Accumulate snapshots with
+`scripts/fetch_data.py --append-alerts`, or obtain a historical flood record
+from PUB directly.
+
+### Databricks### Databricks
 
 `notebooks/01_medallion_pipeline.py` is a Databricks notebook building
 bronze → silver → gold Delta tables, training with MLflow, registering to
@@ -632,12 +745,19 @@ src/floodsense/
   simulate.py    rainfall scenario analysis
   infer.py       scoring service + dashboard payload
   synthetic.py   offline storm generator (canonical schema)
+  audit.py       thirteen leakage checks
+  experiments.py the model zoo, validation-only
+  distribution.py  per-split distribution-shift report
   ingest/        historical CSVs, live APIs, flood-prone data, staging
+    discovery.py   network preflight + endpoint discovery
+    validate.py    the Bronze -> Silver validation gate
 scripts/         train.py, demo.py, fetch_data.py, ablate.py,
-                 refit_risk_score.py
+                 experiments.py, final_evaluation.py, refit_risk_score.py,
+                 network_preflight.py, real_data_pipeline.py,
+                 distribution_report.py, serve_dashboard.py
 results/         the metrics record behind the numbers above
 notebooks/       Databricks medallion pipeline
-tests/           239 tests
+tests/           280 tests
 ```
 
 ---
@@ -645,7 +765,10 @@ tests/           239 tests
 ## Limitations
 
 - **Metrics here are synthetic.** The generator is physically motivated,
-  not calibrated to Singapore's climate. Real skill is unmeasured.
+  not calibrated to Singapore's climate. Real skill is unmeasured. The
+  real-data pipeline is built and gated but has never run: the official
+  hosts are blocked by this environment's egress policy (see *Running on
+  real data*), so no Singapore observation has ever entered the model.
 - **Label history is the bottleneck.** With alerts published by API only
   since late 2025, a production model needs an accumulated alert archive
   or a historical flood record from PUB.

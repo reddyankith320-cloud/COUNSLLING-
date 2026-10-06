@@ -193,3 +193,37 @@ class TestFinalMetricsFile:
             assert "real-world skill" not in text.replace(
                 "not real-world skill", ""
             ), "a synthetic run must not claim real-world skill"
+
+
+class TestLiveVersusDemoMode:
+    """The page must say which dataset it is showing, and never merge them."""
+
+    def test_both_datasets_are_declared(self):
+        html = DASHBOARD.read_text()
+        assert "real_data_metrics.json" in html
+        assert "final_metrics.json" in html
+        assert "real_accuracy_vs_threshold.json" in html
+        assert "accuracy_vs_threshold_test.json" in html
+
+    def test_real_data_is_preferred_over_synthetic(self):
+        html = DASHBOARD.read_text()
+        assert html.index("real_data_metrics.json") < html.index(
+            '"../results/final_metrics.json"'
+        ), "the LIVE dataset must be tried first"
+
+    def test_mode_labels_are_present(self):
+        html = DASHBOARD.read_text()
+        assert "LIVE / REAL DATA" in html
+        assert "DEMO / SYNTHETIC DATA" in html
+        assert "Singapore Government Open Data" in html
+        assert "Synthetic Demo Dataset" in html
+        assert "DATA SOURCE:" in html
+
+    def test_a_synthetic_file_cannot_be_shown_as_live(self):
+        """A mislabelled file must not be able to claim LIVE mode."""
+        html = DASHBOARD.read_text()
+        assert 'd.mode === "LIVE" && synthetic' in html
+
+    def test_mode_badge_is_an_empty_placeholder(self):
+        html = DASHBOARD.read_text()
+        assert '<div id="mode-badge"></div>' in html

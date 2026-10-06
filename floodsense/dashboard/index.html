@@ -66,6 +66,14 @@
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: 12px; padding: 20px 22px;
   }
+  #mode-badge { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 8px; }
+  .mode {
+    display: inline-block; padding: 5px 12px; border-radius: 6px;
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+  }
+  .mode.live { background: var(--good); color: #ffffff; }
+  .mode.demo { background: var(--warning); color: #241a00; }
+  .mode-src { font-size: 13px; color: var(--text-secondary); letter-spacing: 0.02em; }
   .banner {
     display: flex; gap: 10px; align-items: flex-start;
     border-radius: 10px; padding: 12px 16px; margin: 20px 0 0;
@@ -132,6 +140,7 @@
 <body>
 <div class="wrap">
   <h1>FloodSense &mdash; Model Performance</h1>
+  <div id="mode-badge"></div>
   <p class="sub" id="subtitle">Loading&hellip;</p>
 
   <div id="banners"></div>
@@ -195,10 +204,22 @@
 <script>
 // Everything rendered below is read from the result files at load time.
 // No metric is written into this page.
-const SOURCES = {
-  metrics: "../results/final_metrics.json",
-  curve: "../results/accuracy_vs_threshold_test.json",
-};
+// Two mutually exclusive datasets. Real data wins when it exists; the two
+// are never merged, and the page states which one it is showing.
+const DATASETS = [
+  {
+    mode: "LIVE",
+    label: "Singapore Government Open Data",
+    metrics: "../results/real_data_metrics.json",
+    curve: "../results/real_accuracy_vs_threshold.json",
+  },
+  {
+    mode: "DEMO",
+    label: "Synthetic Demo Dataset",
+    metrics: "../results/final_metrics.json",
+    curve: "../results/accuracy_vs_threshold_test.json",
+  },
+];
 
 const pct = (x, d = 1) => (x * 100).toFixed(d) + "%";
 const num = (x, d = 2) => Number(x).toFixed(d);
@@ -420,9 +441,27 @@ function renderMeta(m) {
   document.getElementById("metasec").hidden = false;
 }
 
+async function resolveDataset() {
+  for (const d of DATASETS) {
+    try {
+      const m = await load(d.metrics);
+      // Guard against a mislabelled file: the mode must agree with the data.
+      const synthetic = m.synthetic_data === true;
+      if (d.mode === "LIVE" && synthetic) continue;
+      return { ...d, metrics: m };
+    } catch (e) { /* try the next one */ }
+  }
+  throw new Error("no results file found");
+}
+
 (async function () {
   try {
-    const m = await load(SOURCES.metrics);
+    const dataset = await resolveDataset();
+    const m = dataset.metrics;
+    document.getElementById("mode-badge").innerHTML =
+      `<span class="mode ${dataset.mode === "LIVE" ? "live" : "demo"}">` +
+      `${dataset.mode === "LIVE" ? "LIVE / REAL DATA" : "DEMO / SYNTHETIC DATA"}</span>` +
+      `<span class="mode-src">DATA SOURCE: ${esc(dataset.label)}</span>`;
     document.getElementById("subtitle").innerHTML =
       `Model <code>${esc(m.model)}</code> &middot; threshold <code>${Number(m.threshold).toFixed(6)}</code> ` +
       `chosen on validation &middot; test period ${esc(m.test_period)}`;
@@ -444,16 +483,18 @@ function renderMeta(m) {
     renderMeta(m);
 
     try {
-      renderCharts(await load(SOURCES.curve));
+      renderCharts(await load(dataset.curve));
     } catch (e) {
       document.getElementById("banners").insertAdjacentHTML("beforeend",
         banner("Threshold sweep unavailable: " + esc(e.message), "note"));
     }
   } catch (e) {
     document.getElementById("subtitle").innerHTML =
-      `<span class="err">Could not load ${esc(SOURCES.metrics)}: ${esc(e.message)}.</span><br>` +
-      `Run <code>python scripts/final_evaluation.py</code>, then serve this page with ` +
-      `<code>python scripts/serve_dashboard.py</code> (opening the file directly blocks fetch).`;
+      `<span class="err">No results file found (${esc(e.message)}).</span><br>` +
+      `Run <code>python scripts/real_data_pipeline.py</code> for real data, or ` +
+      `<code>python scripts/final_evaluation.py</code> for the synthetic demo, ` +
+      `then serve this page with <code>python scripts/serve_dashboard.py</code> ` +
+      `(opening the file directly blocks fetch).`;
   }
 })();
 </script>
