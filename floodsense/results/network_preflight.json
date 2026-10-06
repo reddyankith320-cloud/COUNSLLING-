@@ -20,49 +20,49 @@
       "target": "api-open.data.gov.sg",
       "ok": true,
       "detail": "resolves to 104.20.45.103, 172.66.149.179, 2606:4700:10::6814:2d67",
-      "elapsed_ms": 21.666765213012695
+      "elapsed_ms": 22.584199905395508
     },
     {
       "layer": "proxy",
       "target": "api-open.data.gov.sg",
       "ok": false,
       "detail": "HTTP/1.1 403 Forbidden - request blocked: no rule or allowlist entry allows host \"api-open.data.gov.sg\"",
-      "elapsed_ms": 304.48365211486816
+      "elapsed_ms": 285.57562828063965
     },
     {
       "layer": "dns",
       "target": "data.gov.sg",
       "ok": true,
       "detail": "resolves to 104.20.45.103, 172.66.149.179, 2606:4700:10::6814:2d67",
-      "elapsed_ms": 15.986442565917969
+      "elapsed_ms": 17.014741897583008
     },
     {
       "layer": "proxy",
       "target": "data.gov.sg",
       "ok": false,
       "detail": "HTTP/1.1 403 Forbidden - request blocked: no rule or allowlist entry allows host \"data.gov.sg\"",
-      "elapsed_ms": 270.73073387145996
+      "elapsed_ms": 257.02714920043945
     },
     {
       "layer": "dns",
       "target": "www.pub.gov.sg",
       "ok": true,
       "detail": "resolves to 104.18.8.14, 104.18.9.14, 2606:4700::6812:80e",
-      "elapsed_ms": 15.622377395629883
+      "elapsed_ms": 28.390169143676758
     },
     {
       "layer": "proxy",
       "target": "www.pub.gov.sg",
       "ok": false,
       "detail": "HTTP/1.1 403 Forbidden - request blocked: no rule or allowlist entry allows host \"www.pub.gov.sg\"",
-      "elapsed_ms": 277.7247428894043
+      "elapsed_ms": 289.6690368652344
     },
     {
       "layer": "dns",
       "target": "pub.gov.sg",
       "ok": false,
       "detail": "resolution failed: [Errno -5] No address associated with hostname",
-      "elapsed_ms": 36.02242469787598
+      "elapsed_ms": 16.201257705688477
     }
   ],
   "api_key_supplied": false,

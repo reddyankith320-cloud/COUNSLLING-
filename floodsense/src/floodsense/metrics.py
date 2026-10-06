@@ -61,10 +61,24 @@ class ClassificationReport:
     #: dominated by the negative class and must not be read as skill.
     accuracy_not_a_headline_metric: float = 0.0
 
+    #: True when the evaluated split holds only one class. Accuracy is then
+    #: arithmetically valid and completely uninformative: on an all-negative
+    #: split a model that predicts nothing scores 100%. Every consumer must
+    #: check this before presenting accuracy as a result - this is exactly
+    #: the shape a dataset takes when its labels were never joined on.
+    degenerate_single_class: bool = False
+
     def to_dict(self) -> dict:
         return asdict(self)
 
     def summary_line(self) -> str:
+        if self.degenerate_single_class:
+            return (
+                f"DEGENERATE: the split holds one class only "
+                f"({self.n_positive} positives in {self.n_samples} samples). "
+                f"Accuracy reads {self.accuracy_not_a_headline_metric:.2%} and "
+                "means nothing; PR-AUC, ROC-AUC, recall and F1 are undefined."
+            )
         return (
             f"PR-AUC {self.pr_auc:.4f} | ROC-AUC {self.roc_auc:.4f} | "
             f"recall {self.recall:.3f} | precision {self.precision:.3f} | "
@@ -123,6 +137,7 @@ def compute_report(
         true_negative=tn,
         false_negative=fn,
         accuracy_not_a_headline_metric=float((tp + tn) / n) if n else 0.0,
+        degenerate_single_class=bool(single_class),
     )
 
 

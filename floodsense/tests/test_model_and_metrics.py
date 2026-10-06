@@ -524,3 +524,42 @@ class TestTestEvaluationFlag:
         assert payload["test_evaluated"] is True
         assert payload["test"] is not None
         assert payload["test_events"] is not None
+
+
+class TestDegenerateSplitGuard:
+    """An all-negative split scores 100% accuracy and means nothing.
+
+    This is the exact shape a dataset takes when its labels were never
+    joined on, so it must be flagged rather than reported as a result.
+    """
+
+    def test_all_negative_split_is_flagged(self):
+        y = np.zeros(500, dtype=int)
+        p = np.full(500, 0.01)
+        report = compute_report(y, p, threshold=0.5)
+        assert report.degenerate_single_class is True
+        assert report.accuracy_not_a_headline_metric == 1.0
+        assert np.isnan(report.pr_auc) and np.isnan(report.roc_auc)
+
+    def test_all_positive_split_is_flagged(self):
+        report = compute_report(np.ones(100, dtype=int), np.full(100, 0.9), 0.5)
+        assert report.degenerate_single_class is True
+
+    def test_summary_line_refuses_to_present_the_number(self):
+        report = compute_report(np.zeros(500, dtype=int), np.full(500, 0.01), 0.5)
+        line = report.summary_line()
+        assert "DEGENERATE" in line
+        assert "means nothing" in line
+
+    def test_a_normal_split_is_not_flagged(self):
+        y = np.zeros(500, dtype=int)
+        y[:10] = 1
+        rng = np.random.default_rng(0)
+        p = np.clip(0.4 * y + rng.normal(0.1, 0.1, 500), 0, 1)
+        report = compute_report(y, p, 0.5)
+        assert report.degenerate_single_class is False
+        assert "DEGENERATE" not in report.summary_line()
+
+    def test_flag_survives_serialisation(self):
+        report = compute_report(np.zeros(50, dtype=int), np.full(50, 0.1), 0.5)
+        assert report.to_dict()["degenerate_single_class"] is True
