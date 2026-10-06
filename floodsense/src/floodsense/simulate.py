@@ -68,13 +68,40 @@ NON_MONOTONE_NOTE = (
 )
 
 
-def _direction(values: list[float], tol: float = 1e-9) -> str:
-    """Classify a sequence as increasing, decreasing, flat or mixed."""
+#: A change must exceed this share of the series' own magnitude to count,
+#: with ``DIRECTION_ABS_TOLERANCE`` as a floor for near-zero series.
+#:
+#: Deliberately not an epsilon. Averaged over a whole station network, most
+#: of which is dry in any given interval, the mean predicted probability
+#: wobbles in the fourth decimal between scenarios - scaling zero rainfall
+#: still gives zero. At epsilon tolerance that wobble reads as a
+#: non-monotone response and raises the caveat on essentially every
+#: scenario, which trains an operator to ignore the one flag that matters.
+#: Relative rather than absolute so the same rule serves predicted
+#: probabilities (0-1) and risk scores (0-100) without rescaling.
+DIRECTION_REL_TOLERANCE = 0.02
+DIRECTION_ABS_TOLERANCE = 1e-6
+
+
+def _direction(
+    values: list[float],
+    rel_tol: float = DIRECTION_REL_TOLERANCE,
+    abs_tol: float = DIRECTION_ABS_TOLERANCE,
+) -> str:
+    """Classify a sequence as increasing, decreasing, flat or mixed.
+
+    Changes within the tolerance count as flat, so the classification
+    reflects a real response rather than numerical noise.
+    """
     if len(values) < 2:
         return "flat"
-    diffs = np.diff(np.asarray(values, dtype=np.float64))
+    array = np.asarray(values, dtype=np.float64)
+    tol = max(abs_tol, rel_tol * float(np.max(np.abs(array))))
+    diffs = np.diff(array)
+    if np.all(np.abs(diffs) <= tol):
+        return "flat"
     if np.all(diffs >= -tol):
-        return "increasing" if np.any(diffs > tol) else "flat"
+        return "increasing"
     if np.all(diffs <= tol):
         return "decreasing"
     return "mixed"

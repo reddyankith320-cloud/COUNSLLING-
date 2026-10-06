@@ -1,0 +1,94 @@
+{
+  "features": {
+    "accumulation_minutes": [
+      15,
+      30,
+      60,
+      180,
+      360,
+      1440,
+      4320
+    ],
+    "calendar_features": true,
+    "flood_prone_radii_m": [
+      1000.0,
+      2000.0
+    ],
+    "neighbour_k": 3,
+    "neighbour_window_minutes": [
+      30,
+      60
+    ],
+    "peak_window_minutes": 30,
+    "rate_windows_minutes": [
+      15,
+      30
+    ],
+    "trend_window_minutes": 30,
+    "wet_threshold_mm": 0.2
+  },
+  "labels": {
+    "exclude_active_alerts": true,
+    "horizon_max_minutes": 60,
+    "horizon_min_minutes": 30,
+    "post_alert_blackout_minutes": 30,
+    "radius_km": 2.0
+  },
+  "model": {
+    "attention": true,
+    "bidirectional": false,
+    "dropout": 0.25,
+    "head_hidden": 64,
+    "hidden_size": 64,
+    "input_norm": "none",
+    "last_step_skip": true,
+    "num_layers": 2,
+    "skip_hidden": 48,
+    "static_hidden": 32
+  },
+  "risk": {
+    "accumulation_reference_percentile": 99.0,
+    "band_edges": [
+      30,
+      60,
+      80
+    ],
+    "intensity_reference_percentile": 99.0,
+    "recent_alert_bonus": 10.0,
+    "recent_alert_window_minutes": 60,
+    "weight_accumulation": 0.15,
+    "weight_intensity": 0.15,
+    "weight_probability": 0.6,
+    "weight_vulnerability": 0.1
+  },
+  "splits": {
+    "train_end": null,
+    "train_fraction": 0.7,
+    "val_end": null,
+    "val_fraction": 0.15
+  },
+  "target_recall": 0.95,
+  "train": {
+    "batch_size": 512,
+    "device": "auto",
+    "epochs": 40,
+    "focal_alpha": 0.25,
+    "focal_gamma": 2.0,
+    "grad_clip": 1.0,
+    "learning_rate": 0.0007,
+    "loss": "focal",
+    "max_pos_weight": 50.0,
+    "min_delta": 0.0001,
+    "mlflow_experiment": "/Shared/floodsense",
+    "num_workers": 0,
+    "patience": 8,
+    "seed": 20260101,
+    "use_mlflow": false,
+    "weight_decay": 0.0001
+  },
+  "windows": {
+    "negative_keep_rate": 0.08,
+    "seed": 20260101,
+    "sequence_steps": 36
+  }
+}

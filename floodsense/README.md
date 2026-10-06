@@ -15,19 +15,27 @@ flood warnings.**
 Two things about this project's metrics, stated up front because they
 change how you should read everything below.
 
-**1. "95% accuracy" is the wrong target, and any model here can hit it
-without being useful.** Flood alerts are rare: roughly 1 in 400–500
-station-5-minute intervals in this setup, and rarer in reality. A model
-that answers "no flood" every single time scores **99.8% accuracy**. It
-also never warns anyone about anything. Accuracy is reported in
-`metrics.json` under the key
-`accuracy_not_a_headline_metric`, deliberately, and nothing selects on it.
+**1. "95% accuracy" is the wrong target, and the measured numbers show
+why.** Flood alerts are rare — 0.35% of station-5-minute intervals in this
+setup, rarer in reality. On the test split:
+
+| model | accuracy | flood events caught |
+| --- | --- | --- |
+| answers "no flood" every time | **99.65%** | **0 of 308** |
+| FloodSense at its operating point | **73.0%** | **290 of 308** |
+
+The useful model scores 26 points *lower* on accuracy than the useless one,
+because thresholding for recall means accepting false positives and
+accuracy punishes those hardest when the positive class is 0.3% of the
+data. Accuracy is still reported — under the key
+`accuracy_not_a_headline_metric` — and nothing selects on it.
 
 What the project targets instead is **event-level recall ≥ 95%**: of the
 flood episodes that actually happened, what share did we warn about at
 least once inside the 30–60 minute window — priced honestly against the
-false alarms that recall level costs. `Config.target_recall` sets it, and
-the decision threshold is chosen on validation to reach it.
+false alarms that recall level costs. `Config.target_recall` sets it, the
+threshold is chosen on validation to reach it (95.4% there), and the test
+split holds at 94.2% with ~57 minutes of mean lead time.
 
 **2. The numbers in this README are measured on synthetic data.** The four
 official datasets live on data.gov.sg, which was unreachable from the
@@ -52,7 +60,7 @@ python scripts/train.py --source synthetic --days 400 --stations 32
 # Predict / explain / simulate against the trained run
 python scripts/demo.py --run artifacts/run --json dashboard.json
 
-# 153 tests, ~10 seconds
+# 157 tests, ~5 seconds
 python -m pytest tests/ -q
 ```
 
@@ -176,14 +184,18 @@ dashboard payload and the printed table. A simulator that presented a
 falling risk under heavier rainfall as if it were a forecast would be worse
 than one that says it does not know.
 
-### 5. A gradient-boosting baseline is competitive
+### 5. The gradient-boosting baseline is close, and that is the point
 
 `gbm_window_summary` (gradient boosting on per-channel last/mean/max/slope
-over the window) is a genuinely strong competitor and in the first run it
-**beat** the LSTM on PR-AUC. That is reported in `metrics.json` every run,
-not buried: if the recurrence cannot beat a model that merely sees window
-aggregates, the recurrence is not earning its keep, and you should know
-that from the artifact rather than from a reviewer.
+over the window) is a genuinely strong competitor. In the **first** run it
+*beat* the LSTM on PR-AUC, 0.134 to 0.101 — which is what prompted findings
+1 and 2. After those fixes the LSTM leads, 0.1136 to 0.1104 on PR-AUC and
+0.874 to 0.831 on ROC-AUC.
+
+That is a narrow PR-AUC margin and it is reported as narrow. The baselines
+run on every training run and land in `metrics.json` beside the LSTM, so if
+a change makes the recurrence stop earning its keep, that shows up in the
+artifact rather than in a reviewer's comment.
 
 ---
 
@@ -191,26 +203,57 @@ that from the artifact rather than from a reviewer.
 
 Run: `scripts/train.py --source synthetic --days 400 --stations 32
 --epochs 40 --hidden-size 64 --dropout 0.25 --learning-rate 0.0007
---patience 8`. Chronological 70/15/15 split with an embargo; threshold
-chosen on validation for 95% event recall; test scored once.
+--patience 8`. 70,145 parameters. Chronological 70/15/15 split with a
+48-step embargo; threshold chosen on validation for 95% event recall; test
+scored once with that frozen threshold. Full record, including per-epoch
+history and both operating-point tables:
+[`results/run_synth_v3_metrics.json`](results/run_synth_v3_metrics.json).
 
-See `artifacts/run_synth_v3/metrics.json` for the full record, including
-the per-epoch history, the operating-point tables and the baselines.
+### What a responder would care about (test split, 1,883 station-days)
 
-| | value |
+| | |
 | --- | --- |
-| Test PR-AUC | see `metrics.json` → `test.pr_auc` |
-| Test ROC-AUC | → `test.roc_auc` |
-| Test event recall | → `test_events.event_recall` |
-| False alarms / station-day | → `test_events.false_alarms_per_station_day` |
-| Mean warning lead time | → `test_events.mean_lead_minutes` |
-| Base rate | → `test.base_rate` |
+| Flood events caught | **290 of 308 — 94.2%** |
+| Mean warning lead time | **56.9 min** (median 60.0) |
+| False alarms | **4.39 per station-day** |
+| Alarm precision | 3.4% of alarm episodes were real |
 
-`metrics.json` also carries `operating_points_val` (precision at each
-recall target) and `event_operating_curve_val` (event recall vs false-alarm
-load per threshold) — the two tables to put in front of a stakeholder.
+### Model metrics (test split)
 
----
+| metric | LSTM | logreg (last step) | GBM (last step) | GBM (window summary) |
+| --- | --- | --- | --- | --- |
+| **PR-AUC** | **0.1136** | 0.0506 | 0.0953 | 0.1104 |
+| ROC-AUC | **0.8738** | 0.8625 | 0.8377 | 0.8307 |
+
+Base rate 0.00347. Brier 0.0162. Precision at the operating point is 3.06×
+the base rate.
+
+### The accuracy number, since it was asked for
+
+At the chosen operating point this model's accuracy is **73.0%**. A model
+that answers "no flood" every time scores **99.65%** on the same split.
+
+The useful model has *26 points lower accuracy* than the useless one. That
+is the entire argument against the metric, in two numbers: thresholding for
+recall means accepting false positives, and false positives are what
+accuracy punishes hardest when the positive class is 0.3% of the data. If a
+95%-accuracy figure is needed for a submission, this model clears it
+trivially — set the threshold to 1.0 and warn about nothing.
+
+### What 95% recall costs (validation)
+
+| target recall | threshold | precision |
+| --- | --- | --- |
+| 0.70 | 0.165 | 1.74% |
+| 0.80 | 0.143 | 1.16% |
+| 0.90 | 0.107 | 0.66% |
+| **0.95** | 0.085 | **0.46%** |
+| 0.99 | 0.063 | 0.31% |
+
+Per 5-minute interval, 95% recall costs ~0.5% precision. Collapsed into
+episodes the same threshold gives 94.2% event recall at 4.39 false alarms
+per station-day — the same model, counted the way an operations team would
+count it.
 
 ## Data sources
 
@@ -381,9 +424,11 @@ src/floodsense/
   infer.py       scoring service + dashboard payload
   synthetic.py   offline storm generator (canonical schema)
   ingest/        historical CSVs, live APIs, flood-prone data, staging
-scripts/         train.py, demo.py, fetch_data.py
+scripts/         train.py, demo.py, fetch_data.py, ablate.py,
+                 refit_risk_score.py
+results/         the metrics record behind the numbers above
 notebooks/       Databricks medallion pipeline
-tests/           153 tests
+tests/           157 tests
 ```
 
 ---

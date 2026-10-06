@@ -438,3 +438,36 @@ class TestSimulationDirection:
         assert payload["probability_direction"] == "decreasing"
         assert payload["caveat"] is not None
         assert "Not a forecast" in payload["disclaimer"]
+
+    def test_noise_sized_wobble_counts_as_flat(self):
+        """A ten-thousandth of probability must not raise the caveat.
+
+        Averaged over a mostly-dry station network the mean probability
+        wobbles at this scale between scenarios; a caveat that fires on it
+        would fire on every scenario and be ignored.
+        """
+        report = self._report([0.22926, 0.22947, 0.22936, 0.22805])
+        assert report.probability_direction == "flat"
+        assert report.caveat is None
+
+    def test_a_real_reversal_still_fires(self):
+        report = self._report([0.40, 0.20, 0.35])
+        assert report.probability_direction == "mixed"
+        assert report.caveat is not None
+
+    def test_tolerance_is_relative_so_it_serves_both_scales(self):
+        """The same rule must work for probabilities (0-1) and scores (0-100)."""
+        from floodsense.simulate import _direction
+
+        # Risk-score scale.
+        assert _direction([10.0, 10.05]) == "flat"
+        assert _direction([10.0, 12.0]) == "increasing"
+        # Probability scale, same relative sizes.
+        assert _direction([0.10, 0.1005]) == "flat"
+        assert _direction([0.10, 0.12]) == "increasing"
+
+    def test_observed_v3_wobble_reads_as_flat(self):
+        """The actual numbers from the trained run's what-if panel."""
+        from floodsense.simulate import _direction
+
+        assert _direction([0.22926, 0.22947, 0.22936, 0.22805]) == "flat"
