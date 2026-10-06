@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
 
 def load_prepared(args: argparse.Namespace, cfg: Config):
     if args.source == "synthetic":
-        from floodsense.pipeline import prepare_from_synthetic
+        from floodsense.pipeline import prepare
         from floodsense.synthetic import SyntheticConfig, generate
 
         synth = SyntheticConfig(
@@ -72,8 +72,19 @@ def load_prepared(args: argparse.Namespace, cfg: Config):
             seed=args.seed,
             target_alerts_per_station_month=args.alerts_per_station_month,
         )
-        prepared = prepare_from_synthetic(cfg, synth)
-        alerts = generate(synth).alerts
+        # Generate once and pass the pieces through, rather than calling
+        # prepare_from_synthetic and then generate() again for the alerts:
+        # the second pass costs a minute at this size and is one more place
+        # the two copies could drift apart.
+        data = generate(synth)
+        prepared = prepare(
+            readings=data.readings,
+            stations=data.stations,
+            alerts=data.alerts,
+            cfg=cfg,
+            flood_prone_points=data.flood_prone_points,
+        )
+        alerts = data.alerts
         source = (
             f"SYNTHETIC (floodsense.synthetic, days={args.days}, "
             f"stations={args.stations}, seed={args.seed}) - data.gov.sg was "

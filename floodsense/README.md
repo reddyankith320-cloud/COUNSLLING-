@@ -66,7 +66,7 @@ python scripts/train.py --source synthetic --days 400 --stations 32
 # Predict / explain / simulate against the trained run
 python scripts/demo.py --run artifacts/run --json dashboard.json
 
-# 163 tests, ~5 seconds
+# 239 tests, ~6 seconds
 python -m pytest tests/ -q
 ```
 
@@ -227,82 +227,146 @@ artifact rather than in a reviewer's comment.
 
 ---
 
+### 6. With good features, the LSTM stopped earning its keep
+
+After the feature work, gradient boosting on window summaries beats the
+recurrent model on validation PR-AUC: **0.1337 vs 0.1122**. That is the
+project's own stated test from finding 5, applied honestly to its namesake
+model.
+
+The reason is the feature engineering, not a defect in the LSTM. The 54
+channels are already multi-timescale temporal aggregates — ten
+accumulations, four exponentially weighted states, lags, rolling statistics,
+rates and accelerations — so the history the recurrence exists to extract has
+already been handed to every model as a plain vector. A boosted tree
+ensemble reads that vector with far fewer parameters and far less variance
+on 7,269 training positives.
+
+The LSTM is kept, trained and compared on every run. It is simply not
+selected, and the selection is written down in
+`results/model_comparison.json` rather than asserted.
+
+### 7. An accuracy threshold does not transfer across a seasonal shift
+
+The operating point was chosen on validation at 95.25% accuracy / 82.2%
+event recall. The same threshold on the test period gave 98.24% / 68.6%.
+
+Accuracy is base-rate dependent: at a sub-1% positive rate it is essentially
+`1 − false-positive rate`, so a drier evaluation period raises it and sinks
+recall with the threshold untouched. Anything tuned to hit an accuracy
+*number* inherits that fragility. This is the strongest practical argument
+for keeping PR-AUC as the selection metric and treating accuracy purely as a
+deployment constraint — and, in a real deployment, for re-fitting the
+operating point per season rather than freezing one forever.
+
 ## Results (synthetic data — see the warning above)
 
-Run: `scripts/train.py --source synthetic --days 400 --stations 32
---epochs 40 --hidden-size 64 --dropout 0.25 --learning-rate 0.0007
---patience 8`. 70,145 parameters. Chronological 70/15/15 split with a
-48-step embargo; threshold chosen on validation for 95% event recall; test
-scored once with that frozen threshold. Full record, including per-epoch
-history and both operating-point tables:
-[`results/run_synth_v3_metrics.json`](results/run_synth_v3_metrics.json).
+Final run: 540 days, 32 stations, seed 20260601. Eleven candidates
+(5 tabular families x 2 feature sets, plus the LSTM) compared on
+validation; threshold chosen on validation inside the 95–99% accuracy band;
+leakage audit PASS; **test split read exactly once**.
 
-### What a responder would care about (test split, 1,883 station-days)
+Artifacts: [`results/final_metrics.json`](results/final_metrics.json),
+[`results/model_comparison.json`](results/model_comparison.json),
+[`results/confusion_matrix.json`](results/confusion_matrix.json),
+[`results/accuracy_vs_threshold_test.json`](results/accuracy_vs_threshold_test.json),
+[`results/leakage_audit.json`](results/leakage_audit.json).
 
-| | |
-| --- | --- |
-| Flood events caught | **290 of 308 — 94.2%** |
-| Mean warning lead time | **56.9 min** (median 60.0) |
-| False alarms | **4.39 per station-day** |
-| Alarm precision | 3.4% of alarm episodes were real |
+### Selected model
 
-### Model metrics (test split)
+`hist_gradient_boosting:window_summary` — HistGradientBoosting on
+last/mean/max/slope of each of the 54 channels over the 3-hour window, plus
+the 9 static channels (225 features). Chosen on **validation PR-AUC
+0.1337**.
 
-| metric | LSTM | logreg (last step) | GBM (last step) | GBM (window summary) |
-| --- | --- | --- | --- | --- |
-| **PR-AUC** | **0.1136** | 0.0506 | 0.0953 | 0.1104 |
-| ROC-AUC | **0.8738** | 0.8625 | 0.8377 | 0.8307 |
+### Test results, at the frozen threshold 0.464427
 
-Base rate 0.00347. Brier 0.0162. Precision at the operating point is 3.06×
-the base rate.
+| | result | target | |
+| --- | --- | --- | --- |
+| **Accuracy** | **98.24%** | 95–99% | **met** |
+| **Flood-event recall** | **68.6%** (109/159) | ≥80% | **missed** |
+| Mean lead time | 51.4 min | ≥50 min | met |
+| Median lead time | 55 min | — | |
+| False alarms | 1.05 / station-day | reduced vs 4.39 | met |
+| PR-AUC | 0.1114 | — | |
+| ROC-AUC | 0.8557 | — | |
+| Interval precision / F1 | 3.58% / 0.0666 | — | |
+| Alarm precision | 3.9% | — | |
 
-### Accuracy, and how to hit 95% of it honestly
+Confusion matrix (one cell = one station-5-minute interval,
+729,768 total): TP 458 · FP 12,344 ·
+TN 716,467 · FN 499. Base rate 0.00131, so a
+constant "no flood" predictor scores 99.87%
+and catches 0 of 159 events.
 
-At the default operating point this model's accuracy is **73.0%**. A model
-that answers "no flood" every time scores **99.65%** on the same split.
+Test period: 2024-04-05 12:20:00+08:00 to 2024-06-23 23:55:00+08:00, 2534 station-days.
 
-Accuracy is not a property of the model here — it is a dial you set with the
-decision threshold. The whole curve, test split
-([`results/accuracy_vs_threshold_test.json`](results/accuracy_vs_threshold_test.json)):
+### The honest trade-off: both targets were not simultaneously reachable
 
-| threshold | accuracy | events caught | event recall | false alarms/station-day |
-| --- | --- | --- | --- | --- |
-| 0.085 | 40.3% | 303/308 | 98.4% | 3.89 |
-| **0.119** (default) | **73.0%** | 290/308 | 94.2% | 4.39 |
-| **0.201** | **95.00%** | 256/308 | **83.1%** | 1.82 |
-| 0.30 | 98.3% | 226/308 | 73.4% | 0.76 |
-| 0.50 | 99.6% | 32/308 | 10.4% | 0.01 |
-| 0.90 | 99.65% | **0/308** | 0.0% | 0.00 |
+Validation said 95.25% accuracy at **82.2%** event recall. Test, at the same
+frozen threshold, gave 98.24% accuracy at **68.6%**.
+The threshold did not transfer.
 
-So a 95% accuracy requirement is satisfiable **and not vacuous**: at
-threshold 0.2006 the model scores exactly 95.00% while still catching 83.1%
-of flood events with ~52 minutes of mean lead time. It costs about 11 points
-of event recall against the default, and buys a 2.4× reduction in false
-alarms. That trade is a legitimate choice, so it is a supported setting:
+The cause is covariate shift, and the numbers say so plainly: the test
+period is drier than validation — test base rate 0.00131 against a
+validation period with roughly twice the event rate. Accuracy at a fixed
+probability threshold depends on the base rate (at a sub-1% positive rate,
+accuracy is essentially `1 − false-positive rate`), so a drier evaluation
+period pushes accuracy *up* and recall *down* at the same threshold.
 
-```bash
-python scripts/train.py --operating-point accuracy --target-accuracy 0.95
-```
+The test threshold sweep (reporting only — the threshold was already frozen)
+shows how close the two targets come on this period:
 
-What accuracy must never become is the metric that *selects* the model. The
-bottom row is why: 99.65% accuracy, zero floods detected. Model selection
-stays on PR-AUC, and `metrics.json` keeps accuracy under the key
-`accuracy_not_a_headline_metric`.
-
-### What 95% recall costs (validation)
-
-| target recall | threshold | precision |
+| threshold | accuracy | event recall |
 | --- | --- | --- |
-| 0.70 | 0.165 | 1.74% |
-| 0.80 | 0.143 | 1.16% |
-| 0.90 | 0.107 | 0.66% |
-| **0.95** | 0.085 | **0.46%** |
-| 0.99 | 0.063 | 0.31% |
+| 0.250 | 94.30% | **81.8%** |
+| 0.275 | **95.08%** | 77.4% |
+| 0.464 (selected) | 98.24% | 68.6% |
 
-Per 5-minute interval, 95% recall costs ~0.5% precision. Collapsed into
-episodes the same threshold gives 94.2% event recall at 4.39 false alarms
-per station-day — the same model, counted the way an operations team would
-count it.
+At the 95% accuracy edge the best achievable test event recall is **77.4%** —
+2.6 points short of the 80% target. So on this test period, with this model,
+95% accuracy and 80% event recall are *not* simultaneously achievable. That
+is reported rather than engineered around: reaching both would have required
+choosing the threshold on the test split, which is precisely what the
+data-integrity rules forbid.
+
+The defensible fix is a better model, not a better threshold. A model with
+higher PR-AUC moves the whole curve up and buys both at once.
+
+### Model comparison (validation only — test never read)
+
+| Model | PR-AUC | ROC-AUC | Event recall | F1 | Accuracy | Threshold |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **hist_gradient_boosting:window_summary** | **0.1337** | 0.8790 | 0.822 | 0.062 | 95.25% | 0.4644 |
+| lightgbm:window_summary | 0.1309 | 0.8711 | 0.813 | 0.061 | 95.29% | 0.3787 |
+| xgboost:window_summary | 0.1301 | 0.8687 | 0.810 | 0.058 | 95.20% | 0.3845 |
+| random_forest:window_summary | 0.1189 | 0.8850 | 0.834 | 0.064 | 95.34% | 0.5215 |
+| floodsense_lstm:sequence | 0.1122 | 0.8811 | 0.834 | 0.063 | 95.30% | 0.2332 |
+| lightgbm:last_step | 0.1073 | 0.8638 | 0.816 | 0.059 | 95.12% | 0.4445 |
+| xgboost:last_step | 0.1043 | 0.8493 | 0.788 | 0.057 | 95.33% | 0.4487 |
+| random_forest:last_step | 0.1011 | 0.8925 | 0.831 | 0.064 | 95.33% | 0.4873 |
+| hist_gradient_boosting:last_step | 0.0984 | 0.8677 | 0.807 | 0.062 | 95.37% | 0.5197 |
+| logistic_regression:window_summary | 0.0802 | 0.8813 | 0.847 | 0.061 | 95.09% | 0.6804 |
+| logistic_regression:last_step | 0.0669 | 0.8866 | 0.844 | 0.061 | 95.11% | 0.6714 |
+
+Each row is at *its own* 95–99% accuracy operating point, chosen on
+validation, so the table says what each candidate would actually do under
+the accuracy requirement rather than comparing abstractions.
+
+### Submission language
+
+Supported by the numbers above, for a synthetic-data run:
+
+> FloodSense reached **98.24% accuracy on a held-out test
+> period** at a validation-selected operating threshold, detecting
+> **68.6% of observed flood events**
+> (109 of 159) with a **mean lead time
+> of 51 minutes** and
+> 1.05 false alarms per station-day.
+> Metrics are measured on synthetic data and validate the pipeline, not
+> real-world skill on Singapore rainfall.
+
+Do not drop that last sentence while the data is synthetic.
 
 ## How a model gets chosen
 
@@ -573,7 +637,7 @@ scripts/         train.py, demo.py, fetch_data.py, ablate.py,
                  refit_risk_score.py
 results/         the metrics record behind the numbers above
 notebooks/       Databricks medallion pipeline
-tests/           163 tests
+tests/           239 tests
 ```
 
 ---
@@ -600,3 +664,11 @@ tests/           163 tests
 - **The synthetic alert rate (3/station/month) is higher than reality**,
   chosen to make the pipeline trainable. A real base rate is lower, which
   makes the problem harder.
+- **The 80% event-recall target was missed on test** (68.6%), and at the 95%
+  accuracy edge the best this model reaches is 77.4%. Closing that gap needs
+  a better-ranking model, not a different threshold — see finding 7.
+- **The EWM features suit this generator unusually well.** The synthetic
+  hazard includes an exponential saturation term, and an exponentially
+  weighted mean is close to its functional form. The feature family is
+  physically motivated and belongs on real data too, but expect a smaller
+  gain there than the synthetic numbers suggest.

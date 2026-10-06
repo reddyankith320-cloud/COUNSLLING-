@@ -1,0 +1,73 @@
+{
+  "overall": "PASS",
+  "n_pass": 11,
+  "n_fail": 0,
+  "n_info": 2,
+  "checks": [
+    {
+      "name": "future_rainfall_leakage",
+      "status": "PASS",
+      "detail": "Adding 100 mm at the final step of a 6000-step slice changed no earlier feature value (max delta 0.00e+00 over 54 channels)."
+    },
+    {
+      "name": "future_alert_leakage",
+      "status": "PASS",
+      "detail": "Alert-derived static features ['alert_count_log', 'alerts_per_year'] reproduce exactly from training-period alerts only (alerts before 2024-01-16 16:45:00+08:00, max delta 0.00e+00); they carry no post-cutoff information."
+    },
+    {
+      "name": "label_horizon_causality",
+      "status": "PASS",
+      "detail": "Positives refer to alerts starting 6-12 steps (30-60 min) after the sample, so no label overlaps its own input window."
+    },
+    {
+      "name": "temporal_split_order",
+      "status": "PASS",
+      "detail": "Chronological: train ends at step 109640, validation spans 109689-132579, test starts at 132628. No shuffling."
+    },
+    {
+      "name": "split_embargo",
+      "status": "PASS",
+      "detail": "Embargo of 48 steps (= sequence 36 + horizon 12) applied; observed gaps are 49 steps before validation and 49 before test, so no training input window overlaps an evaluation sample."
+    },
+    {
+      "name": "split_disjoint",
+      "status": "PASS",
+      "detail": "No (step, station) sample appears in more than one split (279,786 train / 727,118 val / 729,768 test)."
+    },
+    {
+      "name": "duplicate_events_across_splits",
+      "status": "PASS",
+      "detail": "Every labelled flood event falls entirely within one split; the embargo keeps events from straddling a boundary."
+    },
+    {
+      "name": "scaler_fit_region",
+      "status": "PASS",
+      "detail": "Scaler reproduces exactly from steps [2592, 109641) and differs from whole-record statistics by up to 0.2100, confirming it never saw validation or test."
+    },
+    {
+      "name": "warmup_respected",
+      "status": "PASS",
+      "detail": "First sample at step 2592 >= warm-up 2592 (2592 steps of window fill, 36 steps of sequence)."
+    },
+    {
+      "name": "evaluation_split_integrity",
+      "status": "PASS",
+      "detail": "Validation holds 727,118 of 727,118 eligible samples and test 729,768 of 729,768: neither is subsampled, so precision reflects the true base rate. Negative subsampling applies to training only (279,786 kept of 3,405,727)."
+    },
+    {
+      "name": "station_overlap",
+      "status": "INFO",
+      "detail": "All 32 stations appear in every split, which is intended: the task is forecasting forward in time at known stations, not generalising to unseen ones. The split is purely temporal. A model intended for new, ungauged locations would need a station-wise split as well, and would score worse."
+    },
+    {
+      "name": "feature_selection_on_test",
+      "status": "INFO",
+      "detail": "No data-driven feature selection is performed: all 54 dynamic and 9 static channels are fixed in FeatureConfig before any data is read, so no split can influence which features exist."
+    },
+    {
+      "name": "threshold_selected_on_validation",
+      "status": "PASS",
+      "detail": "Threshold 0.46442737723737776 chosen on validation by max_event_recall_within_accuracy_band; frozen before the test split was read."
+    }
+  ]
+}

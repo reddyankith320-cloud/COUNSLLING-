@@ -1,0 +1,21 @@
+{
+  "model": "hist_gradient_boosting:window_summary",
+  "threshold": 0.46442737723737776,
+  "split": "test",
+  "test_period": "2024-04-05 12:20:00+08:00 to 2024-06-23 23:55:00+08:00",
+  "matrix": {
+    "true_positive": 458,
+    "false_positive": 12344,
+    "true_negative": 716467,
+    "false_negative": 499
+  },
+  "derived": {
+    "accuracy": 0.9824012562896701,
+    "precision": 0.0357756600531167,
+    "recall": 0.4785788923719958,
+    "specificity": 0.9830628242438711,
+    "f1": 0.06657460571262445
+  },
+  "unit": "one station-5-minute interval",
+  "note": "Interval-level counts. The event-level view in final_metrics.json collapses each flood episode and each alarm burst to one unit, which is the operationally meaningful count."
+}

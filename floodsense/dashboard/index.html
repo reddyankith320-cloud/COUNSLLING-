@@ -249,7 +249,8 @@ function renderHeadline(m) {
     ["False alarms", num(m.false_alarms_per_station_day), `per station-day · ${m.false_alarms} of ${m.total_alarms} alarms`],
     ["PR-AUC", num(m.pr_auc, 4), `base rate ${num(m.base_rate, 5)}`],
     ["ROC-AUC", num(m.roc_auc, 4), `Brier ${num(m.brier, 4)}`],
-    ["Interval precision / F1", `${pct(m.precision, 2)} / ${num(m.f1, 3)}`, `alarm precision ${pct(m.alarm_precision, 1)}`],
+    ["Interval precision", pct(m.precision, 2), `alarm precision ${pct(m.alarm_precision, 1)}`],
+    ["Interval F1", num(m.f1, 3), `threshold ${Number(m.threshold).toFixed(3)}`],
   ];
   document.getElementById("tiles").innerHTML = tiles
     .map(([k, v, n]) => `<div class="card tile"><div class="k">${esc(k)}</div>
@@ -287,10 +288,13 @@ function lineChart(svg, rows, series, opts) {
 
   const sel = rows.find((r) => r.is_selected_threshold);
   if (sel) {
+    const anchor = X(sel.threshold) > W - pad.r - 70 ? "end" : "start";
+    const dx = anchor === "end" ? -5 : 5;
     out += `<line x1="${X(sel.threshold)}" y1="${pad.t}" x2="${X(sel.threshold)}" y2="${pad.t + ih}"
              stroke="var(--text-secondary)" stroke-width="1" stroke-dasharray="3 3"/>
-            <text x="${X(sel.threshold) + 5}" y="${pad.t + 11}" font-size="11"
-             fill="var(--text-secondary)" font-family="var(--sans)">selected</text>`;
+            <text x="${X(sel.threshold) + dx}" y="${pad.t + ih - 6}" font-size="11"
+             text-anchor="${anchor}" fill="var(--text-secondary)"
+             font-family="var(--sans)">selected</text>`;
   }
 
   for (const s of series) {
