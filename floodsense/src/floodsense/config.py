@@ -194,6 +194,19 @@ class RiskConfig:
     recent_alert_window_minutes: int = 60
 
 
+#: Nested config sections, by field name.  Declared explicitly because
+#: postponed annotations make ``field.type`` a string (see from_dict).
+SECTIONS: dict[str, type] = {
+    "features": FeatureConfig,
+    "labels": LabelConfig,
+    "windows": WindowConfig,
+    "splits": SplitConfig,
+    "model": ModelConfig,
+    "train": TrainConfig,
+    "risk": RiskConfig,
+}
+
+
 @dataclass
 class Config:
     features: FeatureConfig = field(default_factory=FeatureConfig)
@@ -221,25 +234,22 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Config":
+        """Rebuild a Config, restoring the nested dataclasses.
+
+        The section types are looked up in ``SECTIONS`` rather than read off
+        the field annotations: this module uses postponed annotation
+        evaluation, so ``field.type`` is the *string* ``"ModelConfig"``, and
+        any check against it silently fails - leaving ``cfg.model`` as a
+        plain dict that only breaks later, at the first attribute access
+        inside the inference service.
+        """
+        known = {f.name for f in fields(cls)}
         kwargs: dict[str, Any] = {}
-        for f in fields(cls):
-            if f.name not in data:
-                continue
-            value = data[f.name]
-            if isinstance(value, dict) and hasattr(f.type, "__name__"):
-                sub = {
-                    "features": FeatureConfig,
-                    "labels": LabelConfig,
-                    "windows": WindowConfig,
-                    "splits": SplitConfig,
-                    "model": ModelConfig,
-                    "train": TrainConfig,
-                    "risk": RiskConfig,
-                }.get(f.name)
-                if sub is not None:
-                    kwargs[f.name] = _build(sub, value)
-                    continue
-            kwargs[f.name] = value
+        for name, value in data.items():
+            if name in SECTIONS and isinstance(value, dict):
+                kwargs[name] = _build(SECTIONS[name], value)
+            elif name in known:
+                kwargs[name] = value
         return cls(**kwargs)
 
 
