@@ -77,3 +77,60 @@ class TestWindowKey:
         cfg = candidate.apply(Config(), 7)
         assert cfg.windows.negative_keep_rate == 0.25
         assert cfg.windows.sequence_steps == 72
+
+
+def _row(name: str, pr_auc: float) -> dict:
+    return {"name": name, "pr_auc": pr_auc}
+
+
+class TestMergeTable:
+    def test_same_named_rows_are_replaced(self, sweep):
+        """A corrected rerun must supersede the row it fixes, not duplicate it."""
+        previous = {"candidates": [_row("a", 0.10), _row("b", 0.20)]}
+        merged = sweep.merge_table(previous, [_row("a", 0.30)])
+
+        assert [r["name"] for r in merged["candidates"]] == ["b", "a"]
+        assert merged["replaced"] == 1
+        assert merged["best"]["name"] == "a"
+        assert merged["best"]["pr_auc"] == 0.30
+
+    def test_best_is_recomputed_across_every_row(self, sweep):
+        previous = {"candidates": [_row("a", 0.50)]}
+        merged = sweep.merge_table(previous, [_row("b", 0.20)])
+        assert merged["best"]["name"] == "a"
+
+    def test_a_name_that_now_has_a_row_stops_being_flagged(self, sweep):
+        previous = {
+            "candidates": [_row("a", 0.10)],
+            "not_trained": ["b"],
+            "excluded": ["c"],
+        }
+        merged = sweep.merge_table(previous, [_row("b", 0.40), _row("c", 0.20)])
+
+        assert merged["not_trained"] == []
+        assert merged["excluded"] == []
+        assert merged["resolved"] == ["b", "c"]
+
+    def test_outstanding_names_survive_the_merge(self, sweep):
+        """Dropping these would make a partial table look complete."""
+        previous = {
+            "candidates": [_row("a", 0.10)],
+            "not_trained": ["b", "d"],
+            "excluded": ["c"],
+        }
+        merged = sweep.merge_table(previous, [_row("b", 0.40)])
+
+        assert merged["not_trained"] == ["d"]
+        assert merged["excluded"] == ["c"]
+        assert merged["resolved"] == ["b"]
+
+    def test_notes_carry_forward(self, sweep):
+        previous = {"candidates": [_row("a", 0.1)], "notes": ["why a reran"]}
+        merged = sweep.merge_table(previous, [_row("b", 0.2)])
+        assert merged["notes"] == ["why a reran"]
+
+    def test_merging_into_an_empty_table_is_harmless(self, sweep):
+        merged = sweep.merge_table({}, [_row("a", 0.1)])
+        assert merged["replaced"] == 0
+        assert merged["not_trained"] == []
+        assert merged["best"]["name"] == "a"

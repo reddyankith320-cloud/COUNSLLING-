@@ -192,6 +192,35 @@ def describe_build(key: tuple[int, float]) -> str:
     return f"sequence {key[0]} steps, negative_keep_rate {key[1]}"
 
 
+def merge_table(previous: dict, rows: list[dict]) -> dict:
+    """Fold this run's rows into a previous validation table.
+
+    Same-named rows are replaced, so a corrected rerun supersedes the row it
+    fixes. The previous table's provenance travels with it: a name that now
+    has a row of its own is no longer untrained or excluded and leaves those
+    lists, while anything still outstanding stays, because dropping it would
+    silently turn a partial table into one that looks complete.
+    """
+    replaced = {r["name"] for r in rows}
+    kept = [r for r in previous.get("candidates", [])
+            if r["name"] not in replaced]
+    merged = kept + rows
+    have = {r["name"] for r in merged}
+    flagged = set(previous.get("not_trained", [])) | set(
+        previous.get("excluded", [])
+    )
+    return {
+        "candidates": merged,
+        "best": max(merged, key=lambda r: r["pr_auc"]),
+        "replaced": len(previous.get("candidates", [])) - len(kept),
+        "not_trained": [n for n in previous.get("not_trained", [])
+                        if n not in have],
+        "excluded": [n for n in previous.get("excluded", []) if n not in have],
+        "resolved": sorted(flagged & have),
+        "notes": list(previous.get("notes", [])),
+    }
+
+
 def main() -> int:
     args = parse_args()
     outdir = Path(args.outdir)
@@ -383,17 +412,23 @@ def main() -> int:
 
     out_path = results_dir / "lstm_sweep_validation.json"
     notes: list[str] = []
+    not_trained: list[str] = []
+    excluded: list[str] = []
     if args.merge and out_path.exists():
-        previous = json.loads(out_path.read_text())
-        notes = list(previous.get("notes", []))
-        replaced = {r["name"] for r in rows}
-        kept = [r for r in previous.get("candidates", [])
-                if r["name"] not in replaced]
-        dropped = len(previous.get("candidates", [])) - len(kept)
-        rows = kept + rows
-        best = max(rows, key=lambda r: r["pr_auc"])
-        print(f"[sweep] merged: replaced {dropped} row(s), "
+        merged = merge_table(json.loads(out_path.read_text()), rows)
+        rows = merged["candidates"]
+        best = merged["best"]
+        notes = merged["notes"]
+        not_trained = merged["not_trained"]
+        excluded = merged["excluded"]
+        print(f"[sweep] merged: replaced {merged['replaced']} row(s), "
               f"best is now {best['name']} ({best['pr_auc']:.4f})")
+        if merged["resolved"]:
+            print(f"[sweep] now trained, no longer flagged: "
+                  f"{merged['resolved']}")
+        if not_trained or excluded:
+            print(f"[sweep] still outstanding: not_trained={not_trained} "
+                  f"excluded={excluded}")
     if args.note:
         notes.append(args.note)
 
@@ -407,6 +442,8 @@ def main() -> int:
                 "selection_metric": "validation PR-AUC",
                 "test_set_used": False,
                 "selected": best["name"],
+                "not_trained": not_trained,
+                "excluded": excluded,
                 "notes": notes,
                 "candidates": rows,
             },
