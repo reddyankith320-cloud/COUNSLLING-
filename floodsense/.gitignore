@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Training outputs. Regenerate with scripts/train.py; the metrics record
+# that backs the README is committed under results/ instead.
+artifacts/
+
+# Staged datasets (gigabytes of NEA rainfall CSVs)
+data/
+*.parquet

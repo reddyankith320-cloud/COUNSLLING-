@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "floodsense"
+version = "0.1.0"
+description = "LSTM flash-flood risk model for Singapore built on national open data"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "torch>=2.2",
+    "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+mlflow = ["mlflow>=2.12"]
+parquet = ["pyarrow>=15.0"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

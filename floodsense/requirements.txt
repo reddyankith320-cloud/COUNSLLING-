@@ -1,0 +1,21 @@
+# FloodSense runtime dependencies.
+#
+# The data layer (ingest, grid, features, labels, risk) needs only numpy and
+# pandas, so it can run inside a Spark job without a deep-learning runtime.
+# torch is needed for the model, training, explanation and simulation.
+
+numpy>=1.26
+pandas>=2.2
+torch>=2.2
+scikit-learn>=1.4
+
+# Optional. Training logs to MLflow when it is importable and skips it
+# silently otherwise, so the same script runs locally and on Databricks
+# (where MLflow is already present).
+# mlflow>=2.12
+
+# Optional. Parquet staging falls back to CSV when no engine is installed.
+# pyarrow>=15.0
+
+# Development only.
+# pytest>=8.0
