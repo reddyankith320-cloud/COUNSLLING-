@@ -1,0 +1,92 @@
+[
+  {
+    "threshold": 0.0,
+    "accuracy": 0.003474572363871087,
+    "event_recall": 1.0,
+    "n_detected": 308,
+    "n_events": 308,
+    "precision": 0.003474572363871087,
+    "fa_per_station_day": 0.016996634238554107
+  },
+  {
+    "threshold": 0.05,
+    "accuracy": 0.008326801604499976,
+    "event_recall": 1.0,
+    "n_detected": 308,
+    "n_events": 308,
+    "precision": 0.003485993016894371,
+    "fa_per_station_day": 0.09188805385218314
+  },
+  {
+    "threshold": 0.0853,
+    "accuracy": 0.40329936834339986,
+    "event_recall": 0.9837662337662337,
+    "n_detected": 303,
+    "n_events": 308,
+    "precision": 0.005540081041363069,
+    "fa_per_station_day": 3.885324357969478
+  },
+  {
+    "threshold": 0.1191,
+    "accuracy": 0.7298685969846466,
+    "event_recall": 0.9415584415584416,
+    "n_detected": 290,
+    "n_events": 308,
+    "precision": 0.01062763998700314,
+    "fa_per_station_day": 4.387256212826779
+  },
+  {
+    "threshold": 0.2,
+    "accuracy": 0.9495172668172807,
+    "event_recall": 0.8311688311688312,
+    "n_detected": 256,
+    "n_events": 308,
+    "precision": 0.04029145474876456,
+    "fa_per_station_day": 1.8388233666835725
+  },
+  {
+    "threshold": 0.3,
+    "accuracy": 0.9825920973765503,
+    "event_recall": 0.7337662337662337,
+    "n_detected": 226,
+    "n_events": 308,
+    "precision": 0.09131234447690144,
+    "fa_per_station_day": 0.7600682373553415
+  },
+  {
+    "threshold": 0.5,
+    "accuracy": 0.9964073954539168,
+    "event_recall": 0.1038961038961039,
+    "n_detected": 32,
+    "n_events": 308,
+    "precision": 0.41919191919191917,
+    "fa_per_station_day": 0.007436027479367422
+  },
+  {
+    "threshold": 0.7,
+    "accuracy": 0.9964922310848817,
+    "event_recall": 0.045454545454545456,
+    "n_detected": 14,
+    "n_events": 308,
+    "precision": 0.40425531914893614,
+    "fa_per_station_day": 0.0015934344598644474
+  },
+  {
+    "threshold": 0.9,
+    "accuracy": 0.996525427636129,
+    "event_recall": 0.0,
+    "n_detected": 0,
+    "n_events": 308,
+    "precision": 0.0,
+    "fa_per_station_day": 0.0
+  },
+  {
+    "threshold": 1.01,
+    "accuracy": 0.996525427636129,
+    "event_recall": 0.0,
+    "n_detected": 0,
+    "n_events": 308,
+    "precision": 0.0,
+    "fa_per_station_day": 0.0
+  }
+]

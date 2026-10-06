@@ -32,6 +32,7 @@ from .metrics import (
     compute_report,
     lift_over_base_rate,
     precision_at_recall_table,
+    threshold_for_accuracy,
     threshold_for_recall,
 )
 from .model import FloodSenseLSTM
@@ -286,13 +287,48 @@ def train(
             f"{achieved_recall:.3f} (precision {achieved_precision:.3f})"
         )
 
-    # Primary operating point: event-level recall is the decision-relevant
-    # target - catching the flood episode, not every 5-minute cell in it.
-    threshold, val_event_report = threshold_for_event_recall(
+    # Primary operating point.  Event-level recall is the default because it
+    # is the decision-relevant target: catch the flood episode, not every
+    # 5-minute cell in it.
+    if cfg.operating_point == "accuracy":
+        threshold, achieved_accuracy, accuracy_recall = threshold_for_accuracy(
+            val_y, val_prob, cfg.target_accuracy
+        )
+        if verbose:
+            print(
+                f"  operating point by accuracy: threshold {threshold:.4f} "
+                f"gives {achieved_accuracy:.2%} accuracy "
+                f"(interval recall {accuracy_recall:.3f}) on validation"
+            )
+            if achieved_accuracy < cfg.target_accuracy:
+                print(
+                    f"  note: {cfg.target_accuracy:.2%} accuracy is not "
+                    f"reachable; best is {achieved_accuracy:.2%}"
+                )
+    elif cfg.operating_point == "interval_recall":
+        threshold = interval_threshold
+    elif cfg.operating_point == "event_recall":
+        threshold, _ = threshold_for_event_recall(
+            prepared.splits.val,
+            val_y,
+            val_prob,
+            cfg.target_recall,
+            n_steps,
+            n_stations,
+            **event_kwargs,
+        )
+    else:
+        raise ValueError(
+            f"operating_point must be 'event_recall', 'interval_recall' or "
+            f"'accuracy', got {cfg.operating_point!r}"
+        )
+
+    # Always reported at the chosen threshold, whichever rule picked it.
+    val_event_report = event_level_report(
         prepared.splits.val,
         val_y,
         val_prob,
-        cfg.target_recall,
+        threshold,
         n_steps,
         n_stations,
         **event_kwargs,

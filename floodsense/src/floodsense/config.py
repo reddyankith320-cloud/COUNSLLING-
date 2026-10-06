@@ -220,8 +220,23 @@ class Config:
     #: Operating point: pick the decision threshold that reaches at least
     #: this recall on the validation split.  Missing a flood costs far more
     #: than a false alarm, so recall - not accuracy - sets the operating
-    #: point.  See metrics.threshold_for_recall.
+    #: point by default.  See metrics.threshold_for_recall.
     target_recall: float = 0.95
+
+    #: How the decision threshold is chosen: ``"event_recall"`` (default),
+    #: ``"interval_recall"``, or ``"accuracy"``.
+    #:
+    #: ``"accuracy"`` exists because "the model must be at least X% accurate"
+    #: is a requirement that really does get written into briefs. It is
+    #: supported, and the cost is reported rather than argued about: on this
+    #: problem a 95% accuracy constraint trades roughly 11 points of event
+    #: recall against a 2.4x reduction in false alarms. What it must never
+    #: become is the *selection* metric - at a 0.3% base rate, "flag
+    #: nothing" scores 99.65%.
+    operating_point: str = "event_recall"
+
+    #: Accuracy to reach when ``operating_point == "accuracy"``.
+    target_accuracy: float = 0.95
 
     def to_json(self, path: str | Path) -> None:
         path = Path(path)

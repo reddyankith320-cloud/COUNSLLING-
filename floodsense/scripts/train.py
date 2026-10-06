@@ -68,6 +68,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="event-level recall the operating point must reach",
     )
+    p.add_argument(
+        "--operating-point",
+        choices=("event_recall", "interval_recall", "accuracy"),
+        default=None,
+        help="rule for choosing the decision threshold (default event_recall)",
+    )
+    p.add_argument(
+        "--target-accuracy",
+        type=float,
+        default=None,
+        help="accuracy to reach when --operating-point accuracy",
+    )
     p.add_argument("--negative-keep-rate", type=float, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--device", default=None, choices=("auto", "cpu", "cuda"))
@@ -106,6 +118,10 @@ def build_config(args: argparse.Namespace) -> Config:
         cfg.model.input_norm = args.input_norm
     if args.target_recall is not None:
         cfg.target_recall = args.target_recall
+    if args.operating_point is not None:
+        cfg.operating_point = args.operating_point
+    if args.target_accuracy is not None:
+        cfg.target_accuracy = args.target_accuracy
     if args.negative_keep_rate is not None:
         cfg.windows.negative_keep_rate = args.negative_keep_rate
     if args.seed is not None:

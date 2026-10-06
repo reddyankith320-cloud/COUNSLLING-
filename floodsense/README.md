@@ -30,6 +30,12 @@ accuracy punishes those hardest when the positive class is 0.3% of the
 data. Accuracy is still reported — under the key
 `accuracy_not_a_headline_metric` — and nothing selects on it.
 
+If you need a 95% accuracy figure, it is available without being
+meaningless: `--operating-point accuracy --target-accuracy 0.95` gives
+95.00% accuracy while still catching 83.1% of flood events. See
+[the accuracy curve](#accuracy-and-how-to-hit-95-of-it-honestly) for what
+each setting costs.
+
 What the project targets instead is **event-level recall ≥ 95%**: of the
 flood episodes that actually happened, what share did we warn about at
 least once inside the 30–60 minute window — priced honestly against the
@@ -60,7 +66,7 @@ python scripts/train.py --source synthetic --days 400 --stations 32
 # Predict / explain / simulate against the trained run
 python scripts/demo.py --run artifacts/run --json dashboard.json
 
-# 157 tests, ~5 seconds
+# 163 tests, ~5 seconds
 python -m pytest tests/ -q
 ```
 
@@ -228,17 +234,38 @@ history and both operating-point tables:
 Base rate 0.00347. Brier 0.0162. Precision at the operating point is 3.06×
 the base rate.
 
-### The accuracy number, since it was asked for
+### Accuracy, and how to hit 95% of it honestly
 
-At the chosen operating point this model's accuracy is **73.0%**. A model
+At the default operating point this model's accuracy is **73.0%**. A model
 that answers "no flood" every time scores **99.65%** on the same split.
 
-The useful model has *26 points lower accuracy* than the useless one. That
-is the entire argument against the metric, in two numbers: thresholding for
-recall means accepting false positives, and false positives are what
-accuracy punishes hardest when the positive class is 0.3% of the data. If a
-95%-accuracy figure is needed for a submission, this model clears it
-trivially — set the threshold to 1.0 and warn about nothing.
+Accuracy is not a property of the model here — it is a dial you set with the
+decision threshold. The whole curve, test split
+([`results/accuracy_vs_threshold_test.json`](results/accuracy_vs_threshold_test.json)):
+
+| threshold | accuracy | events caught | event recall | false alarms/station-day |
+| --- | --- | --- | --- | --- |
+| 0.085 | 40.3% | 303/308 | 98.4% | 3.89 |
+| **0.119** (default) | **73.0%** | 290/308 | 94.2% | 4.39 |
+| **0.201** | **95.00%** | 256/308 | **83.1%** | 1.82 |
+| 0.30 | 98.3% | 226/308 | 73.4% | 0.76 |
+| 0.50 | 99.6% | 32/308 | 10.4% | 0.01 |
+| 0.90 | 99.65% | **0/308** | 0.0% | 0.00 |
+
+So a 95% accuracy requirement is satisfiable **and not vacuous**: at
+threshold 0.2006 the model scores exactly 95.00% while still catching 83.1%
+of flood events with ~52 minutes of mean lead time. It costs about 11 points
+of event recall against the default, and buys a 2.4× reduction in false
+alarms. That trade is a legitimate choice, so it is a supported setting:
+
+```bash
+python scripts/train.py --operating-point accuracy --target-accuracy 0.95
+```
+
+What accuracy must never become is the metric that *selects* the model. The
+bottom row is why: 99.65% accuracy, zero floods detected. Model selection
+stays on PR-AUC, and `metrics.json` keeps accuracy under the key
+`accuracy_not_a_headline_metric`.
 
 ### What 95% recall costs (validation)
 
@@ -428,7 +455,7 @@ scripts/         train.py, demo.py, fetch_data.py, ablate.py,
                  refit_risk_score.py
 results/         the metrics record behind the numbers above
 notebooks/       Databricks medallion pipeline
-tests/           157 tests
+tests/           163 tests
 ```
 
 ---

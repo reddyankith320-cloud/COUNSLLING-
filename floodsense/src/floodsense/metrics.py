@@ -157,6 +157,63 @@ def threshold_for_recall(
     return float(thresholds[pick]), float(recall[pick]), float(precision[pick])
 
 
+def threshold_for_accuracy(
+    y_true: np.ndarray, y_prob: np.ndarray, target_accuracy: float
+) -> tuple[float, float, float]:
+    """Lowest threshold whose accuracy reaches ``target_accuracy``.
+
+    Provided because "the model must be at least X% accurate" is a real
+    requirement that gets written into briefs, and the honest way to meet it
+    is to show what it costs rather than to argue with it.
+
+    Accuracy is *not* monotone in the threshold here. It rises from near
+    zero (everything flagged) to ``1 - base_rate`` (nothing flagged), so for
+    any achievable target there is a whole interval of thresholds that meet
+    it. The **lowest** such threshold is returned, because that is the one
+    with the highest recall: of the settings that satisfy the accuracy
+    constraint, it catches the most floods.
+
+    Returns:
+        ``(threshold, achieved_accuracy, achieved_recall)``. If the target
+        is unreachable, the best-accuracy threshold is returned - check the
+        achieved value.
+    """
+    y_true = np.asarray(y_true).reshape(-1).astype(np.int8)
+    y_prob = np.asarray(y_prob, dtype=np.float64).reshape(-1)
+    if y_true.size == 0:
+        return 0.5, 0.0, 0.0
+
+    # Candidate thresholds: the distinct predicted values, plus a point
+    # above the maximum so "flag nothing" is reachable.
+    candidates = np.unique(y_prob)
+    if candidates.size > 2048:
+        candidates = np.quantile(candidates, np.linspace(0.0, 1.0, 2048))
+    candidates = np.append(candidates, candidates[-1] + 1e-9)
+
+    positives = y_true == 1
+    n = y_true.size
+    best = (float(candidates[-1]), -1.0, 0.0)
+
+    for thr in candidates:
+        predicted = y_prob >= thr
+        accuracy = float((predicted == positives).sum() / n)
+        if accuracy >= target_accuracy:
+            recall = (
+                float((predicted & positives).sum() / positives.sum())
+                if positives.any()
+                else 0.0
+            )
+            return float(thr), accuracy, recall
+        if accuracy > best[1]:
+            recall = (
+                float((predicted & positives).sum() / positives.sum())
+                if positives.any()
+                else 0.0
+            )
+            best = (float(thr), accuracy, recall)
+    return best
+
+
 def precision_at_recall_table(
     y_true: np.ndarray,
     y_prob: np.ndarray,

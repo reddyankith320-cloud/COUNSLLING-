@@ -411,3 +411,76 @@ class TestInputNormalisation:
 
         restored = FloodSenseLSTM.load(path)
         assert isinstance(restored.input_norm, torch.nn.LayerNorm)
+
+
+class TestAccuracyOperatingPoint:
+    """Threshold selection by accuracy, and why it needs care.
+
+    Accuracy is not monotone in the threshold on an imbalanced problem: it
+    rises from near zero (flag everything) to 1 - base_rate (flag nothing).
+    So a target is met by an interval of thresholds, and which one you
+    return decides how many floods you catch.
+    """
+
+    def _data(self, n=4000, base_rate=0.01, seed=0):
+        rng = np.random.default_rng(seed)
+        y = (rng.random(n) < base_rate).astype(np.int8)
+        p = np.clip(0.45 * y + rng.normal(0.08, 0.12, n), 0.0, 1.0)
+        return y, p
+
+    def test_reaches_the_target(self):
+        from floodsense.metrics import threshold_for_accuracy
+
+        y, p = self._data()
+        thr, accuracy, _ = threshold_for_accuracy(y, p, 0.90)
+        assert accuracy >= 0.90
+        report = compute_report(y, p, thr)
+        assert report.accuracy_not_a_headline_metric >= 0.90
+
+    def test_returns_the_highest_recall_threshold_meeting_the_target(self):
+        """Of the thresholds that satisfy the constraint, pick the kindest.
+
+        A higher threshold also satisfies a reached accuracy target but
+        catches fewer events, so returning the lowest is what makes the
+        constraint cost as little recall as possible.
+        """
+        from floodsense.metrics import threshold_for_accuracy
+
+        y, p = self._data()
+        thr, accuracy, recall = threshold_for_accuracy(y, p, 0.90)
+        higher = compute_report(y, p, min(thr + 0.15, 1.0))
+        if higher.accuracy_not_a_headline_metric >= 0.90:
+            assert recall >= higher.recall
+
+    def test_trivial_target_is_met_without_flagging_nothing(self):
+        from floodsense.metrics import threshold_for_accuracy
+
+        y, p = self._data(base_rate=0.01)
+        _, accuracy, recall = threshold_for_accuracy(y, p, 0.50)
+        assert accuracy >= 0.50
+        assert recall > 0.0          # not the degenerate corner
+
+    def test_unreachable_target_returns_the_best_available(self):
+        from floodsense.metrics import threshold_for_accuracy
+
+        y, p = self._data()
+        _, accuracy, _ = threshold_for_accuracy(y, p, 1.01)
+        assert accuracy < 1.01
+        assert accuracy > 0.0
+
+    def test_flag_nothing_is_reachable(self):
+        """The base-rate ceiling must be attainable, or the search is wrong."""
+        from floodsense.metrics import threshold_for_accuracy
+
+        y, p = self._data(base_rate=0.01)
+        ceiling = 1.0 - float(y.mean())
+        thr, accuracy, _ = threshold_for_accuracy(y, p, ceiling)
+        assert accuracy >= ceiling - 1e-9
+
+    def test_empty_input_is_safe(self):
+        from floodsense.metrics import threshold_for_accuracy
+
+        thr, accuracy, recall = threshold_for_accuracy(
+            np.zeros(0), np.zeros(0), 0.95
+        )
+        assert (thr, accuracy, recall) == (0.5, 0.0, 0.0)
