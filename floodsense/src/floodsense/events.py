@@ -250,3 +250,131 @@ def threshold_for_event_recall(
             index, y_true, y_prob, best_threshold, n_steps, n_stations, **kwargs
         )
     return best_threshold, best_report
+
+
+def accuracy_curve(
+    y_true: np.ndarray, y_prob: np.ndarray, thresholds: np.ndarray
+) -> np.ndarray:
+    """Accuracy at each threshold, vectorised over candidates.
+
+    Cheap enough to scan hundreds of thresholds, which is what makes it
+    practical to filter to an accuracy band *before* paying for the
+    event-level evaluation of each survivor.
+    """
+    y = np.asarray(y_true).reshape(-1).astype(bool)
+    p = np.asarray(y_prob, dtype=np.float64).reshape(-1)
+    out = np.empty(len(thresholds), dtype=np.float64)
+    for i, thr in enumerate(thresholds):
+        out[i] = float(((p >= thr) == y).mean())
+    return out
+
+
+def threshold_for_accuracy_band(
+    index: np.ndarray,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    accuracy_low: float,
+    accuracy_high: float,
+    n_steps: int,
+    n_stations: int,
+    *,
+    n_candidates: int = 240,
+    max_event_evaluations: int = 30,
+    **kwargs,
+) -> dict:
+    """Pick the threshold meeting an accuracy band with the best event recall.
+
+    The selection rule, in order:
+
+    1. keep thresholds whose accuracy lies in ``[accuracy_low,
+       accuracy_high]``;
+    2. among those, take the highest **event-level** recall;
+    3. break ties on the lowest threshold.
+
+    Why that order. Accuracy is a constraint imposed from outside - a
+    requirement that the model be right most of the time - while catching
+    floods is the job. So accuracy filters the candidates and recall chooses
+    among them, never the other way round.
+
+    Step 3 rarely decides anything, because both quantities are monotone in
+    the threshold in opposite directions: accuracy climbs from near zero
+    (flag everything) toward ``1 - base_rate`` (flag nothing), while event
+    recall falls. The band is therefore a contiguous interval and its lowest
+    member usually has the best recall. The search does not *assume* that -
+    accuracy can wobble locally - it measures event recall on the survivors
+    and takes the best.
+
+    **This must be run on validation probabilities.** The returned threshold
+    is then frozen and applied to test exactly once.
+
+    Returns:
+        A dict with ``threshold``, ``accuracy``, ``event_report``,
+        ``n_candidates_in_band``, ``selected_by`` and ``band``.
+    """
+    y = np.asarray(y_true).reshape(-1)
+    p = np.asarray(y_prob, dtype=np.float64).reshape(-1)
+
+    candidates = np.unique(p)
+    if candidates.size > n_candidates:
+        candidates = np.unique(
+            np.quantile(candidates, np.linspace(0.0, 1.0, n_candidates))
+        )
+    # Include a threshold above the maximum so "flag nothing" is reachable,
+    # which is the accuracy ceiling and must be representable.
+    candidates = np.append(candidates, float(candidates[-1]) + 1e-9)
+
+    accuracies = accuracy_curve(y, p, candidates)
+    in_band = np.flatnonzero(
+        (accuracies >= accuracy_low) & (accuracies <= accuracy_high)
+    )
+
+    if in_band.size == 0:
+        # Unreachable band: fall back to the closest accuracy and say so.
+        best = int(np.argmin(np.abs(accuracies - accuracy_low)))
+        report = event_level_report(
+            index, y, p, float(candidates[best]), n_steps, n_stations, **kwargs
+        )
+        return {
+            "threshold": float(candidates[best]),
+            "accuracy": float(accuracies[best]),
+            "event_report": report,
+            "n_candidates_in_band": 0,
+            "selected_by": "closest_accuracy_band_unreachable",
+            "band": [accuracy_low, accuracy_high],
+        }
+
+    # Evaluate event recall only on the survivors, thinned if there are many.
+    if in_band.size > max_event_evaluations:
+        picks = in_band[
+            np.unique(
+                np.linspace(0, in_band.size - 1, max_event_evaluations).astype(int)
+            )
+        ]
+    else:
+        picks = in_band
+
+    best_threshold = float(candidates[picks[0]])
+    best_accuracy = float(accuracies[picks[0]])
+    best_report = None
+    best_recall = -1.0
+
+    for i in picks:
+        thr = float(candidates[i])
+        report = event_level_report(
+            index, y, p, thr, n_steps, n_stations, **kwargs
+        )
+        # Strict >: ties keep the earlier, lower threshold.
+        if report.event_recall > best_recall:
+            best_recall = report.event_recall
+            best_threshold = thr
+            best_accuracy = float(accuracies[i])
+            best_report = report
+
+    return {
+        "threshold": best_threshold,
+        "accuracy": best_accuracy,
+        "event_report": best_report,
+        "n_candidates_in_band": int(in_band.size),
+        "selected_by": "max_event_recall_within_accuracy_band",
+        "band": [accuracy_low, accuracy_high],
+    }

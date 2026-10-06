@@ -141,8 +141,16 @@ def train(
     *,
     run_baselines: bool = True,
     verbose: bool = True,
+    evaluate_test: bool = True,
 ) -> TrainResult:
-    """Fit the LSTM, select a threshold, evaluate once on the test split."""
+    """Fit the LSTM, select a threshold, evaluate once on the test split.
+
+    Args:
+        evaluate_test: set False while comparing candidate models. The test
+            split must stay unread until the model and threshold are frozen,
+            and a sweep that scores test on every candidate has already
+            broken that, however the numbers are later reported.
+    """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     seed_everything(cfg.train.seed)
@@ -349,7 +357,11 @@ def train(
         **event_kwargs,
     )
 
-    test_prob, test_y, _ = predict(model, test_loader, device)
+    test_prob, test_y, _ = (
+        predict(model, test_loader, device)
+        if evaluate_test
+        else (np.zeros(0), np.zeros(0), 0.0)
+    )
     if len(test_y):
         test_report = compute_report(test_y, test_prob, threshold)
         test_event_report = event_level_report(

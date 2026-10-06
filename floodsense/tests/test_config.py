@@ -109,7 +109,10 @@ class TestRoundTrip:
         """A new section must be added to SECTIONS or it loads as a dict."""
         from dataclasses import fields
 
-        scalars = {"target_recall", "operating_point", "target_accuracy"}
+        scalars = {
+            "target_recall", "operating_point", "target_accuracy",
+            "accuracy_band",
+        }
         nested = {f.name for f in fields(Config) if f.name not in scalars}
         assert nested == set(SECTIONS), (
             "Config gained or lost a section; update SECTIONS in config.py"

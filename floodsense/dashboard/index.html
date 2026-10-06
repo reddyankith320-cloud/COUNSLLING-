@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FloodSense Model Performance</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;   /* accuracy */
+    --series-2: #eb6834;   /* event recall */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 16px 64px;
+    background: var(--page); color: var(--text-primary);
+    font-family: var(--sans); line-height: 1.5;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 28px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 17px; font-weight: 600; margin: 40px 0 14px; }
+  p.sub { margin: 0; color: var(--text-secondary); font-size: 15px; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px;
+  }
+  .banner {
+    display: flex; gap: 10px; align-items: flex-start;
+    border-radius: 10px; padding: 12px 16px; margin: 20px 0 0;
+    font-size: 14px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-secondary);
+  }
+  .banner .mark { font-weight: 700; flex: none; }
+
+  .hero { margin: 24px 0 0; display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-end; }
+  .hero .figure { font-size: 64px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+  .hero .label { font-size: 14px; color: var(--text-secondary); margin-bottom: 6px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chip {
+    display: inline-flex; gap: 6px; align-items: center;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 11px; font-size: 13px; color: var(--text-secondary);
+    background: var(--surface-1);
+  }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
+  .tiles {
+    display: grid; gap: 12px; margin-top: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+  .tile .k { font-size: 13px; color: var(--text-secondary); }
+  .tile .v { font-size: 30px; font-weight: 600; margin-top: 4px; letter-spacing: -0.01em; }
+  .tile .n { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+  .legend .item { display: inline-flex; gap: 7px; align-items: center; }
+  .legend .swatch { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+
+  .charts { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 880px) { .charts { grid-template-columns: 1.45fr 1fr; } }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  tr.selected td { background: color-mix(in oklab, var(--series-1) 12%, transparent); font-weight: 600; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--text-secondary); }
+  .cm { display: grid; grid-template-columns: auto 1fr 1fr; gap: 1px; margin-top: 4px; }
+  .cm div { padding: 10px 12px; font-size: 14px; background: var(--surface-1); }
+  .cm .hd { color: var(--text-secondary); font-size: 12px; }
+  .cm .num { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 18px; }
+  dl.meta { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin: 0; font-size: 14px; }
+  dl.meta dt { color: var(--text-secondary); }
+  dl.meta dd { margin: 0; word-break: break-word; }
+  code { font-size: 13px; }
+  .err { color: var(--critical); }
+  .tip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .08s;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgba(0,0,0,.14);
+    z-index: 10; min-width: 150px;
+  }
+  .tip .row { display: flex; justify-content: space-between; gap: 14px; }
+  .tip .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FloodSense &mdash; Model Performance</h1>
+  <p class="sub" id="subtitle">Loading&hellip;</p>
+
+  <div id="banners"></div>
+
+  <section id="headline" hidden>
+    <h2>Operating point</h2>
+    <div class="card">
+      <div class="hero">
+        <div>
+          <div class="label" id="hero-label">Test accuracy</div>
+          <div class="figure" id="hero-value">&mdash;</div>
+          <div class="chips" id="hero-chips"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section id="chartsec" hidden>
+    <h2>What the threshold buys and costs (test split)</h2>
+    <div class="charts">
+      <div class="card">
+        <div class="legend">
+          <span class="item"><span class="swatch" style="background:var(--series-1)"></span>Accuracy</span>
+          <span class="item"><span class="swatch" style="background:var(--series-2)"></span>Flood-event recall</span>
+        </div>
+        <svg id="chart-main" viewBox="0 0 640 300" role="img"
+             aria-label="Accuracy and flood-event recall against decision threshold, with the selected operating threshold marked."></svg>
+      </div>
+      <div class="card">
+        <div class="legend"><span class="item">False alarms per station-day</span></div>
+        <svg id="chart-fa" viewBox="0 0 420 300" role="img"
+             aria-label="False alarms per station-day against decision threshold."></svg>
+      </div>
+    </div>
+    <details>
+      <summary>Table view &mdash; full threshold sweep</summary>
+      <div class="card" style="margin-top:10px; overflow-x:auto">
+        <table id="curve-table"></table>
+      </div>
+    </details>
+  </section>
+
+  <section id="cmsec" hidden>
+    <h2>Confusion matrix</h2>
+    <div class="card">
+      <div class="cm" id="cm"></div>
+      <p class="sub" id="cm-note" style="margin-top:12px; font-size:13px"></p>
+    </div>
+  </section>
+
+  <section id="metasec" hidden>
+    <h2>Provenance</h2>
+    <div class="card"><dl class="meta" id="meta"></dl></div>
+  </section>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+// Everything rendered below is read from the result files at load time.
+// No metric is written into this page.
+const SOURCES = {
+  metrics: "../results/final_metrics.json",
+  curve: "../results/accuracy_vs_threshold_test.json",
+};
+
+const pct = (x, d = 1) => (x * 100).toFixed(d) + "%";
+const num = (x, d = 2) => Number(x).toFixed(d);
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+async function load(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(`${url} -> HTTP ${r.status}`);
+  return r.json();
+}
+
+function chip(text, state) {
+  const color = state === "good" ? "var(--good)" : state === "bad" ? "var(--critical)" : "var(--warning)";
+  const mark = state === "good" ? "PASS" : state === "bad" ? "FAIL" : "NOTE";
+  return `<span class="chip"><span class="dot" style="background:${color}"></span>
+          <strong>${mark}</strong> ${esc(text)}</span>`;
+}
+
+function banner(text, state) {
+  const mark = state === "bad" ? "!" : state === "good" ? "✓" : "i";
+  const color = state === "bad" ? "var(--critical)" : state === "good" ? "var(--good)" : "var(--warning)";
+  return `<div class="banner"><span class="mark" style="color:${color}">${mark}</span><span>${text}</span></div>`;
+}
+
+function renderHeadline(m) {
+  document.getElementById("hero-label").textContent =
+    `Test accuracy · target ${pct(m.accuracy_band_target[0], 0)}–${pct(m.accuracy_band_target[1], 0)}`;
+  document.getElementById("hero-value").textContent = pct(m.accuracy, 2);
+
+  const chips = [
+    chip(
+      m.accuracy_in_target_band
+        ? `inside the ${pct(m.accuracy_band_target[0], 0)}–${pct(m.accuracy_band_target[1], 0)} band`
+        : `outside the ${pct(m.accuracy_band_target[0], 0)}–${pct(m.accuracy_band_target[1], 0)} band`,
+      m.accuracy_in_target_band ? "good" : "bad"
+    ),
+    chip(
+      `event recall ${pct(m.event_recall)} vs target ${pct(m.event_recall_target, 0)}`,
+      m.event_recall_meets_target ? "good" : "bad"
+    ),
+    chip(`leakage audit ${m.leakage_audit}`, m.leakage_audit === "PASS" ? "good" : "bad"),
+  ];
+  document.getElementById("hero-chips").innerHTML = chips.join("");
+
+  const tiles = [
+    ["Flood-event recall", pct(m.event_recall), `${m.n_events_detected} of ${m.n_test_events} events caught`],
+    ["Mean lead time", `${num(m.mean_lead_time_minutes, 1)} min`, `median ${num(m.median_lead_time_minutes, 0)} min`],
+    ["False alarms", num(m.false_alarms_per_station_day), `per station-day · ${m.false_alarms} of ${m.total_alarms} alarms`],
+    ["PR-AUC", num(m.pr_auc, 4), `base rate ${num(m.base_rate, 5)}`],
+    ["ROC-AUC", num(m.roc_auc, 4), `Brier ${num(m.brier, 4)}`],
+    ["Interval precision / F1", `${pct(m.precision, 2)} / ${num(m.f1, 3)}`, `alarm precision ${pct(m.alarm_precision, 1)}`],
+  ];
+  document.getElementById("tiles").innerHTML = tiles
+    .map(([k, v, n]) => `<div class="card tile"><div class="k">${esc(k)}</div>
+        <div class="v">${esc(v)}</div><div class="n">${esc(n)}</div></div>`)
+    .join("");
+  document.getElementById("headline").hidden = false;
+}
+
+function lineChart(svg, rows, series, opts) {
+  const W = opts.width, H = 300;
+  const pad = { l: 46, r: 16, t: 10, b: 34 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const xs = rows.map((r) => r.threshold);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y1 = opts.yMax;
+  const X = (v) => pad.l + ((v - x0) / (x1 - x0 || 1)) * iw;
+  const Y = (v) => pad.t + ih - (v / (y1 || 1)) * ih;
+
+  let out = "";
+  const yTicks = opts.yTicks;
+  for (const t of yTicks) {
+    out += `<line x1="${pad.l}" y1="${Y(t)}" x2="${W - pad.r}" y2="${Y(t)}"
+             stroke="var(--grid)" stroke-width="1"/>
+            <text x="${pad.l - 8}" y="${Y(t) + 4}" text-anchor="end" font-size="11"
+             fill="var(--muted)" font-family="var(--sans)">${opts.yFmt(t)}</text>`;
+  }
+  for (const t of [0, 0.25, 0.5, 0.75, 1].map((f) => x0 + f * (x1 - x0))) {
+    out += `<text x="${X(t)}" y="${H - pad.b + 18}" text-anchor="middle" font-size="11"
+             fill="var(--muted)" font-family="var(--sans)">${t.toFixed(2)}</text>`;
+  }
+  out += `<line x1="${pad.l}" y1="${pad.t + ih}" x2="${W - pad.r}" y2="${pad.t + ih}"
+           stroke="var(--baseline)" stroke-width="1"/>`;
+  out += `<text x="${pad.l + iw / 2}" y="${H - 2}" text-anchor="middle" font-size="11"
+           fill="var(--muted)" font-family="var(--sans)">Decision threshold</text>`;
+
+  const sel = rows.find((r) => r.is_selected_threshold);
+  if (sel) {
+    out += `<line x1="${X(sel.threshold)}" y1="${pad.t}" x2="${X(sel.threshold)}" y2="${pad.t + ih}"
+             stroke="var(--text-secondary)" stroke-width="1" stroke-dasharray="3 3"/>
+            <text x="${X(sel.threshold) + 5}" y="${pad.t + 11}" font-size="11"
+             fill="var(--text-secondary)" font-family="var(--sans)">selected</text>`;
+  }
+
+  for (const s of series) {
+    const d = rows.map((r, i) => `${i ? "L" : "M"}${X(r.threshold)},${Y(s.get(r))}`).join("");
+    out += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (sel) {
+      out += `<circle cx="${X(sel.threshold)}" cy="${Y(s.get(sel))}" r="4.5"
+               fill="${s.color}" stroke="var(--surface-1)" stroke-width="2"/>
+              <text x="${X(sel.threshold) + 9}" y="${Y(s.get(sel)) - 8}" font-size="11.5"
+               font-weight="600" fill="var(--text-primary)" font-family="var(--sans)"
+               >${s.label(sel)}</text>`;
+    }
+  }
+
+  out += `<rect x="${pad.l}" y="${pad.t}" width="${iw}" height="${ih}" fill="transparent"
+           class="hit" data-x0="${x0}" data-x1="${x1}" data-padl="${pad.l}" data-iw="${iw}"/>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = out;
+  return { X, Y, rows };
+}
+
+function attachHover(svg, rows, series) {
+  const tip = document.getElementById("tip");
+  const hit = svg.querySelector(".hit");
+  if (!hit) return;
+  const show = (evt) => {
+    const box = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const vx = ((evt.clientX - box.left) / box.width) * vb.width;
+    const x0 = +hit.dataset.x0, x1 = +hit.dataset.x1;
+    const padl = +hit.dataset.padl, iw = +hit.dataset.iw;
+    const t = x0 + ((vx - padl) / iw) * (x1 - x0);
+    let best = rows[0];
+    for (const r of rows) if (Math.abs(r.threshold - t) < Math.abs(best.threshold - t)) best = r;
+    tip.innerHTML =
+      `<div class="row"><span>Threshold</span><span>${best.threshold.toFixed(3)}</span></div>` +
+      series.map((s) => `<div class="row"><span>${s.name}</span><span>${s.label(best)}</span></div>`).join("");
+    tip.style.left = Math.min(evt.clientX + 14, window.innerWidth - 190) + "px";
+    tip.style.top = evt.clientY + 14 + "px";
+    tip.style.opacity = 1;
+  };
+  hit.addEventListener("mousemove", show);
+  hit.addEventListener("mouseleave", () => (tip.style.opacity = 0));
+}
+
+function renderCharts(curve) {
+  const rows = curve.curve.slice().sort((a, b) => a.threshold - b.threshold);
+
+  const mainSeries = [
+    { name: "Accuracy", color: "var(--series-1)", get: (r) => r.accuracy, label: (r) => pct(r.accuracy, 1) },
+    { name: "Event recall", color: "var(--series-2)", get: (r) => r.event_recall, label: (r) => pct(r.event_recall, 1) },
+  ];
+  const main = document.getElementById("chart-main");
+  lineChart(main, rows, mainSeries, {
+    width: 640, yMax: 1, yTicks: [0, 0.25, 0.5, 0.75, 1],
+    yFmt: (t) => (t * 100).toFixed(0) + "%",
+  });
+  attachHover(main, rows, mainSeries);
+
+  const faMax = Math.max(...rows.map((r) => r.false_alarms_per_station_day), 0.1);
+  const faSeries = [{
+    name: "False alarms / station-day", color: "var(--series-1)",
+    get: (r) => r.false_alarms_per_station_day, label: (r) => num(r.false_alarms_per_station_day),
+  }];
+  const fa = document.getElementById("chart-fa");
+  const step = faMax / 4;
+  lineChart(fa, rows, faSeries, {
+    width: 420, yMax: faMax * 1.05,
+    yTicks: [0, step, 2 * step, 3 * step, 4 * step],
+    yFmt: (t) => t.toFixed(t < 1 ? 2 : 1),
+  });
+  attachHover(fa, rows, faSeries);
+
+  const head = ["Threshold", "Accuracy", "Event recall", "Events", "Precision", "F1", "FA/station-day", "Mean lead"];
+  document.getElementById("curve-table").innerHTML =
+    `<thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map((r) => `<tr class="${r.is_selected_threshold ? "selected" : ""}">
+        <td>${r.threshold.toFixed(4)}</td><td>${pct(r.accuracy, 2)}</td>
+        <td>${pct(r.event_recall, 1)}</td><td>${r.events_detected}/${r.n_events}</td>
+        <td>${pct(r.precision, 2)}</td><td>${num(r.f1, 3)}</td>
+        <td>${num(r.false_alarms_per_station_day)}</td>
+        <td>${num(r.mean_lead_minutes, 0)} min</td></tr>`).join("") +
+    `</tbody>`;
+  document.getElementById("chartsec").hidden = false;
+}
+
+function renderConfusion(m) {
+  document.getElementById("cm").innerHTML = `
+    <div class="hd"></div><div class="hd">Predicted flood</div><div class="hd">Predicted no flood</div>
+    <div class="hd">Actual flood</div><div class="num" style="color:var(--good)">${m.tp.toLocaleString()}</div>
+    <div class="num" style="color:var(--critical)">${m.fn.toLocaleString()}</div>
+    <div class="hd">Actual no flood</div><div class="num" style="color:var(--critical)">${m.fp.toLocaleString()}</div>
+    <div class="num">${m.tn.toLocaleString()}</div>`;
+  document.getElementById("cm-note").textContent =
+    `One cell = one station-5-minute interval, ${m.n_test_samples.toLocaleString()} in total. ` +
+    `A model predicting "no flood" everywhere would score ` +
+    `${pct(m.constant_negative_accuracy, 2)} accuracy here and catch 0 of ${m.n_test_events} events, ` +
+    `which is why accuracy is an operating-point constraint and not the selection metric ` +
+    `(that is ${m.selection_metric}).`;
+  document.getElementById("cmsec").hidden = false;
+}
+
+function renderMeta(m) {
+  const p = m.threshold_provenance || {};
+  const rows = [
+    ["Model", `<code>${esc(m.model)}</code>`],
+    ["Operating threshold", `<code>${Number(m.threshold).toFixed(6)}</code>`],
+    ["Threshold chosen on", `${esc(p.selected_on || "?")} &mdash; ${esc(p.rule || "?")}`],
+    ["Validation accuracy", pct(m.validation_accuracy, 2)],
+    ["Validation event recall", pct(m.validation_event_recall, 1)],
+    ["Validation PR-AUC", num(m.validation_pr_auc, 4)],
+    ["Test period", esc(m.test_period)],
+    ["Test exposure", `${num(m.station_days, 1)} station-days`],
+    ["Data source", esc(m.data_source)],
+    ["Leakage audit", esc(m.leakage_audit)],
+  ];
+  document.getElementById("meta").innerHTML = rows
+    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+  document.getElementById("metasec").hidden = false;
+}
+
+(async function () {
+  try {
+    const m = await load(SOURCES.metrics);
+    document.getElementById("subtitle").innerHTML =
+      `Model <code>${esc(m.model)}</code> &middot; threshold <code>${Number(m.threshold).toFixed(6)}</code> ` +
+      `chosen on validation &middot; test period ${esc(m.test_period)}`;
+
+    const banners = [];
+    if (m.synthetic_data) {
+      banners.push(banner(
+        "<strong>Synthetic data.</strong> These metrics validate the pipeline, not real-world " +
+        "skill on Singapore rainfall. " + esc(m.data_source), "bad"));
+    }
+    banners.push(banner(esc(m.disclaimer), "note"));
+    if (m.leakage_audit !== "PASS") {
+      banners.push(banner("<strong>Leakage audit did not pass.</strong> Treat these numbers as provisional.", "bad"));
+    }
+    document.getElementById("banners").innerHTML = banners.join("");
+
+    renderHeadline(m);
+    renderConfusion(m);
+    renderMeta(m);
+
+    try {
+      renderCharts(await load(SOURCES.curve));
+    } catch (e) {
+      document.getElementById("banners").insertAdjacentHTML("beforeend",
+        banner("Threshold sweep unavailable: " + esc(e.message), "note"));
+    }
+  } catch (e) {
+    document.getElementById("subtitle").innerHTML =
+      `<span class="err">Could not load ${esc(SOURCES.metrics)}: ${esc(e.message)}.</span><br>` +
+      `Run <code>python scripts/final_evaluation.py</code>, then serve this page with ` +
+      `<code>python scripts/serve_dashboard.py</code> (opening the file directly blocks fetch).`;
+  }
+})();
+</script>
+</body>
+</html>

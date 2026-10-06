@@ -149,6 +149,50 @@ def trend_slope(x: np.ndarray, window: int) -> np.ndarray:
     return linear_filter(x, (centred / denom).astype(np.float32))
 
 
+def ewm(x: np.ndarray, halflife_steps: float) -> np.ndarray:
+    """Causal exponentially weighted mean along the time axis.
+
+    ``y[t] = a * x[t] + (1 - a) * y[t-1]`` with ``a = 1 - 0.5 ** (1 /
+    halflife)``.  This is a leaky integrator, which is the natural form for
+    antecedent wetness: rainfall charges the state and drainage discharges
+    it at a roughly constant fractional rate.
+
+    Implemented with ``scipy.signal.lfilter`` so the recursion runs in C
+    rather than as a Python loop over 100k+ timesteps; the pure-numpy
+    fallback is used only if scipy is unavailable.
+    """
+    if halflife_steps <= 0:
+        raise ValueError("halflife_steps must be positive")
+    alpha = 1.0 - 0.5 ** (1.0 / halflife_steps)
+
+    try:
+        from scipy.signal import lfilter
+
+        out = lfilter([alpha], [1.0, -(1.0 - alpha)], x, axis=0)
+        return np.ascontiguousarray(out, dtype=np.float32)
+    except ImportError:
+        out = np.empty_like(x, dtype=np.float32)
+        state = np.zeros(x.shape[1:], dtype=np.float64)
+        for t in range(x.shape[0]):
+            state = alpha * x[t] + (1.0 - alpha) * state
+            out[t] = state
+        return out
+
+
+def rolling_std(x: np.ndarray, window: int) -> np.ndarray:
+    """Standard deviation over the trailing ``window`` steps.
+
+    From the cumulative sums of ``x`` and ``x**2``, so it costs two passes
+    regardless of window length.  The variance is clipped at zero because
+    the sum-of-squares identity can go slightly negative on cancellation.
+    """
+    if window < 2:
+        raise ValueError("window must be >= 2")
+    mean = rolling_sum(x, window) / window
+    mean_sq = rolling_sum(np.square(x.astype(np.float64)), window) / window
+    return np.sqrt(np.clip(mean_sq - np.square(mean), 0.0, None)).astype(np.float32)
+
+
 def steps_since(condition: np.ndarray, cap: int) -> np.ndarray:
     """Steps elapsed since ``condition`` was last true, per column.
 
@@ -234,6 +278,16 @@ def build_dynamic_features(
     peak_steps = _minutes_to_steps(cfg.peak_window_minutes)
     add(f"peak_5min_{_label(cfg.peak_window_minutes)}", rolling_max(rain, peak_steps))
 
+    for minutes in cfg.rolling_stat_windows_minutes:
+        steps = _minutes_to_steps(minutes)
+        if minutes not in acc:
+            acc[minutes] = rolling_sum(rain, steps)
+        add(f"roll_mean_{_label(minutes)}", acc[minutes] / steps)
+        add(f"roll_max_{_label(minutes)}", rolling_max(rain, steps))
+        if steps >= 2:
+            # Separates a steady soak from burst-and-pause of equal depth.
+            add(f"roll_std_{_label(minutes)}", rolling_std(rain, steps))
+
     for minutes in (cfg.peak_window_minutes, 60):
         if minutes in acc:
             add(
@@ -246,6 +300,32 @@ def build_dynamic_features(
             acc[minutes] = rolling_sum(rain, _minutes_to_steps(minutes))
         steps = _minutes_to_steps(minutes)
         add(f"rate_{_label(minutes)}", acc[minutes] - shift_down(acc[minutes], steps))
+
+    for minutes in cfg.acceleration_windows_minutes:
+        if minutes not in acc:
+            acc[minutes] = rolling_sum(rain, _minutes_to_steps(minutes))
+        steps = _minutes_to_steps(minutes)
+        series = acc[minutes]
+        # Second difference: is the rate of accumulation itself rising?
+        add(
+            f"accel_{_label(minutes)}",
+            series - 2.0 * shift_down(series, steps) + shift_down(series, 2 * steps),
+        )
+
+    for minutes in cfg.percent_change_windows_minutes:
+        if minutes not in acc:
+            acc[minutes] = rolling_sum(rain, _minutes_to_steps(minutes))
+        steps = _minutes_to_steps(minutes)
+        series = acc[minutes]
+        previous = shift_down(series, steps)
+        # Scale-free: distinguishes 1 mm -> 2 mm from 40 mm -> 41 mm.
+        add(
+            f"pct_change_{_label(minutes)}",
+            (series - previous) / (previous + 1.0),
+        )
+
+    for minutes in cfg.lag_minutes:
+        add(f"lag_rain_{_label(minutes)}", shift_down(rain, _minutes_to_steps(minutes)))
 
     trend_steps = _minutes_to_steps(cfg.trend_window_minutes)
     add(
@@ -260,6 +340,13 @@ def build_dynamic_features(
     if 1440 in acc and 4320 in acc:
         add("wet_ratio_24h_72h", acc[1440] / (acc[4320] + _EPS))
 
+    # Antecedent wetness as a leaky integrator - see FeatureConfig.
+    for minutes in cfg.ewm_halflife_minutes:
+        add(
+            f"ewm_{_label(minutes)}",
+            ewm(rain, float(_minutes_to_steps(minutes))),
+        )
+
     add("observed", observed)
     gap = steps_since(observed > 0.5, cap=day_steps)
     add("gap_log", np.log1p(gap))
@@ -273,8 +360,15 @@ def build_dynamic_features(
             if nbr_minutes not in acc:
                 acc[nbr_minutes] = rolling_sum(rain, _minutes_to_steps(nbr_minutes))
             gathered = acc[nbr_minutes][:, neighbours]       # (T, S, k)
-            add(f"nbr_acc_{_label(nbr_minutes)}", gathered.mean(axis=2))
+            neighbour_mean = gathered.mean(axis=2)
+            add(f"nbr_acc_{_label(nbr_minutes)}", neighbour_mean)
             add(f"nbr_max_acc_{_label(nbr_minutes)}", gathered.max(axis=2))
+            if cfg.spatial_gradient:
+                # Positive = the cell is centred here rather than district-wide.
+                add(
+                    f"gradient_{_label(nbr_minutes)}",
+                    acc[nbr_minutes] - neighbour_mean,
+                )
 
     if cfg.calendar_features:
         minute_of_day = (
@@ -282,18 +376,42 @@ def build_dynamic_features(
         ).astype(np.float32)
         day_of_year = grid.times.dayofyear.to_numpy().astype(np.float32)
         two_pi = 2.0 * np.pi
-        for name, arr in (
+        channels_1d: list[tuple[str, np.ndarray]] = [
             ("hour_sin", np.sin(two_pi * minute_of_day / 1440.0)),
             ("hour_cos", np.cos(two_pi * minute_of_day / 1440.0)),
             ("doy_sin", np.sin(two_pi * day_of_year / 365.25)),
             ("doy_cos", np.cos(two_pi * day_of_year / 365.25)),
-        ):
-            add(name, np.repeat(arr[:, None], s, axis=1))
+        ]
+
+        if cfg.seasonal_features:
+            weekday = grid.times.dayofweek.to_numpy().astype(np.float32)
+            month = grid.times.month.to_numpy()
+            channels_1d += [
+                ("dow_sin", np.sin(two_pi * weekday / 7.0)),
+                ("dow_cos", np.cos(two_pi * weekday / 7.0)),
+                # Singapore's two monsoon seasons, as indicators alongside
+                # the smooth day-of-year encoding: the transition into a
+                # monsoon surge is abrupt, and a sinusoid cannot represent
+                # a step.
+                ("monsoon_ne", np.isin(month, (12, 1, 2, 3)).astype(np.float32)),
+                ("monsoon_sw", np.isin(month, (6, 7, 8, 9)).astype(np.float32)),
+            ]
+
+        for name, arr in channels_1d:
+            add(name, np.repeat(np.asarray(arr, dtype=np.float32)[:, None], s, axis=1))
 
     values = np.stack(channels, axis=2).astype(np.float32)
+    # The longest fixed window, but also enough burn-in for the slowest
+    # exponential state: an EWM initialised at zero reads low until a few
+    # half-lives have passed, and training on that bias would teach the
+    # model that every record starts dry.
     warmup = max(
         (_minutes_to_steps(m) for m in cfg.accumulation_minutes), default=1
     )
+    if cfg.ewm_halflife_minutes:
+        warmup = max(
+            warmup, 3 * max(_minutes_to_steps(m) for m in cfg.ewm_halflife_minutes)
+        )
     return FeatureMatrix(
         values=values,
         names=names,
@@ -394,6 +512,25 @@ def build_static_features(
         add("dist_floodprone_km", np.full(s, 99.0))
         for radius_m in cfg.flood_prone_radii_m:
             add(f"floodprone_within_{int(radius_m)}m", np.zeros(s))
+
+    # Station density: how well observed this station's surroundings are.
+    # A station with few neighbours has a weaker spatial-context feature, so
+    # telling the model how much to trust those channels is worth a column.
+    if s > 1:
+        distances = pairwise_km(
+            grid.longitude, grid.latitude, grid.longitude, grid.latitude
+        )
+        np.fill_diagonal(distances, np.inf)
+        for radius_m in cfg.station_density_radii_m:
+            add(
+                f"stations_within_{int(radius_m)}m",
+                (distances <= radius_m / 1000.0).sum(axis=1),
+            )
+        add("dist_nearest_station_km", distances.min(axis=1))
+    else:
+        for radius_m in cfg.station_density_radii_m:
+            add(f"stations_within_{int(radius_m)}m", np.zeros(s))
+        add("dist_nearest_station_km", np.full(s, 99.0))
 
     return StaticFeatures(
         values=np.stack(cols, axis=1).astype(np.float32),

@@ -31,9 +31,18 @@ from .labels import LabelSet
 #: Channel-name prefixes that are non-negative and heavy-tailed.
 _LOG1P_PREFIXES = (
     "rain_", "acc_", "peak_", "intensity_", "mean_intensity_", "nbr_",
+    "roll_mean_", "roll_max_", "roll_std_", "ewm_", "lag_rain_",
 )
 #: Channel-name prefixes that are signed and heavy-tailed.
-_SIGNED_LOG1P_PREFIXES = ("rate_", "trend_slope_")
+#:
+#: These can take either sign, so log1p would be undefined on half their
+#: range; the signed variant compresses the tails symmetrically. Getting a
+#: channel into the wrong group is not fatal but it does waste the
+#: compression: an unscaled accumulation tail dominates the standardised
+#: variance and the model spends capacity on outliers.
+_SIGNED_LOG1P_PREFIXES = (
+    "rate_", "trend_slope_", "accel_", "gradient_", "pct_change_",
+)
 
 
 @dataclass

@@ -103,7 +103,7 @@ class TestLabels:
 
 
 class TestSplits:
-    def _prepared_bits(self, n_steps: int = 2500, n_stations: int = 2):
+    def _prepared_bits(self, n_steps: int = 6000, n_stations: int = 2):
         rng = np.random.default_rng(0)
         grid = make_grid(
             rng.gamma(1.0, 0.3, (n_steps, n_stations)).astype(np.float32), n_stations
@@ -141,7 +141,7 @@ class TestSplits:
         assert splits.train[:, 0].min() >= cfg.windows.sequence_steps - 1
 
     def test_short_record_raises_a_useful_error(self):
-        grid, features, labels = self._prepared_bits(n_steps=100)
+        grid, features, labels = self._prepared_bits(n_steps=1200)
         with pytest.raises(ValueError, match="warm-up"):
             build_splits(features, labels, Config())
 
@@ -190,18 +190,18 @@ class TestScaler:
     def test_scaler_sees_only_the_training_region(self):
         """A huge anomaly after the training cut must not move the scaler."""
         rng = np.random.default_rng(5)
-        rain = rng.gamma(1.0, 0.3, (2500, 2)).astype(np.float32)
+        rain = rng.gamma(1.0, 0.3, (6000, 2)).astype(np.float32)
         grid_a = make_grid(rain, 2)
 
         rain_b = rain.copy()
-        rain_b[2400:, :] += 500.0                 # extreme, far past train_end
+        rain_b[5800:, :] += 500.0                 # extreme, far past train_end
         grid_b = make_grid(rain_b, 2)
 
         cfg = Config()
         out = []
         for grid in (grid_a, grid_b):
             features = build_dynamic_features(grid)
-            labels = build_labels(grid, make_alerts([1200], grid), LabelConfig())
+            labels = build_labels(grid, make_alerts([3500], grid), LabelConfig())
             splits = build_splits(features, labels, cfg)
             statics = build_static_features(grid)
             out.append(fit_scaler(features, statics, labels, splits))
@@ -211,9 +211,9 @@ class TestScaler:
 
     def test_scaled_features_are_standardised(self):
         rng = np.random.default_rng(6)
-        grid = make_grid(rng.gamma(1.0, 0.3, (2500, 2)).astype(np.float32), 2)
+        grid = make_grid(rng.gamma(1.0, 0.3, (6000, 2)).astype(np.float32), 2)
         features = build_dynamic_features(grid)
-        labels = build_labels(grid, make_alerts([1200], grid), LabelConfig())
+        labels = build_labels(grid, make_alerts([3500], grid), LabelConfig())
         cfg = Config()
         splits = build_splits(features, labels, cfg)
         statics = build_static_features(grid)

@@ -12,3 +12,6 @@ artifacts/
 # Staged datasets (gigabytes of NEA rainfall CSVs)
 data/
 *.parquet
+
+# MLflow local tracking store
+mlruns/

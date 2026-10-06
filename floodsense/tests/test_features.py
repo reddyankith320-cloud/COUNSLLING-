@@ -156,9 +156,82 @@ class TestDynamicFeatures:
 
     def test_warmup_matches_longest_window(self):
         grid = make_grid(np.zeros((2000, 1), dtype=np.float32))
-        cfg = FeatureConfig(accumulation_minutes=(15, 60, 1440))
+        cfg = FeatureConfig(accumulation_minutes=(15, 60, 1440), ewm_halflife_minutes=())
         matrix = build_dynamic_features(grid, cfg)
         assert matrix.warmup_steps == 288       # 1440 min / 5 min
+
+    def test_warmup_covers_ewm_burn_in(self):
+        """An EWM starts at zero, so it reads low for a few half-lives.
+
+        Training on that stretch would teach the model that every record
+        begins dry, so the warm-up has to cover the slowest exponential
+        state even when it exceeds the longest fixed window.
+        """
+        grid = make_grid(np.zeros((4000, 1), dtype=np.float32))
+        cfg = FeatureConfig(
+            accumulation_minutes=(15, 60), ewm_halflife_minutes=(1440,)
+        )
+        matrix = build_dynamic_features(grid, cfg)
+        assert matrix.warmup_steps == 3 * 288   # three half-lives
+
+    def test_ewm_channels_present_and_ordered_by_halflife(self):
+        grid = make_grid(
+            np.random.default_rng(4).gamma(1.0, 0.3, (3000, 2)).astype(np.float32), 2
+        )
+        matrix = build_dynamic_features(grid)
+        for name in ("ewm_1h", "ewm_6h", "ewm_1d", "ewm_3d"):
+            assert name in matrix.names
+
+    def test_longer_halflife_is_smoother(self):
+        """A slow EWM must respond less to a single burst than a fast one."""
+        rain = np.zeros((3000, 1), dtype=np.float32)
+        rain[1500, 0] = 50.0
+        matrix = build_dynamic_features(make_grid(rain))
+        fast = matrix.channel("ewm_1h")[1500, 0]
+        slow = matrix.channel("ewm_3d")[1500, 0]
+        assert fast > slow > 0.0
+
+    def test_rolling_std_separates_burst_from_soak(self):
+        """Equal depth, different distribution, different std."""
+        burst = np.zeros((3000, 1), dtype=np.float32)
+        burst[1500, 0] = 6.0
+        soak = np.zeros((3000, 1), dtype=np.float32)
+        soak[1495:1501, 0] = 1.0
+
+        b = build_dynamic_features(make_grid(burst))
+        s = build_dynamic_features(make_grid(soak))
+        assert b.channel("acc_30m")[1500, 0] == pytest.approx(
+            s.channel("acc_30m")[1500, 0], abs=1e-4
+        )
+        assert b.channel("roll_std_30m")[1500, 0] > s.channel("roll_std_30m")[1500, 0]
+
+    def test_spatial_gradient_is_zero_when_rain_is_uniform(self):
+        rain = np.full((3000, 4), 0.4, dtype=np.float32)
+        matrix = build_dynamic_features(make_grid(rain, 4))
+        assert np.allclose(matrix.channel("gradient_30m")[2900], 0.0, atol=1e-3)
+
+    def test_spatial_gradient_is_positive_where_the_cell_sits(self):
+        rain = np.zeros((3000, 4), dtype=np.float32)
+        rain[1400:1500, 0] = 3.0                 # only station 0 is raining
+        matrix = build_dynamic_features(make_grid(rain, 4))
+        gradient = matrix.channel("gradient_30m")[1499]
+        assert gradient[0] > 0.0
+        assert np.all(gradient[1:] <= 0.0)
+
+    def test_lag_features_expose_past_rainfall(self):
+        rain = np.zeros((3000, 1), dtype=np.float32)
+        rain[1500, 0] = 9.0
+        matrix = build_dynamic_features(make_grid(rain))
+        assert matrix.channel("lag_rain_30m")[1506, 0] == pytest.approx(9.0)
+        assert matrix.channel("lag_rain_30m")[1500, 0] == pytest.approx(0.0)
+
+    def test_monsoon_indicators_are_binary_and_disjoint(self):
+        grid = make_grid(np.zeros((3000, 1), dtype=np.float32))
+        matrix = build_dynamic_features(grid)
+        ne = matrix.channel("monsoon_ne")
+        sw = matrix.channel("monsoon_sw")
+        assert set(np.unique(ne)) <= {0.0, 1.0}
+        assert np.all(ne * sw == 0.0)           # never both at once
 
     def test_missing_data_sets_observed_flag(self):
         rain = np.zeros((900, 1), dtype=np.float32)

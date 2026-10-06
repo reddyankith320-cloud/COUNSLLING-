@@ -18,7 +18,9 @@ class FeatureConfig:
     """Temporal feature windows, in minutes."""
 
     #: Rolling accumulation windows.  Each becomes one feature channel.
-    accumulation_minutes: tuple[int, ...] = (15, 30, 60, 180, 360, 1440, 4320)
+    accumulation_minutes: tuple[int, ...] = (
+        10, 15, 30, 60, 120, 180, 360, 720, 1440, 4320,
+    )
 
     #: Window for "max 5-minute rainfall within", i.e. peak intensity.
     peak_window_minutes: int = 30
@@ -48,6 +50,45 @@ class FeatureConfig:
     #: Radii (metres) for "number of flood-prone locations within" static
     #: features.
     flood_prone_radii_m: tuple[float, ...] = (1000.0, 2000.0)
+
+    #: Half-lives (minutes) for exponentially weighted rainfall.
+    #:
+    #: Physically the most important block in here. A catchment's readiness
+    #: to flood is an antecedent-wetness state: rain raises it, drainage
+    #: bleeds it away at a roughly exponential rate. A fixed-window
+    #: accumulation approximates that badly (every minute inside the window
+    #: counts equally, everything outside counts for nothing), whereas an
+    #: exponentially weighted mean *is* a leaky integrator of exactly that
+    #: form. Several half-lives let the model pick the drainage timescale
+    #: rather than having one assumed for it.
+    ewm_halflife_minutes: tuple[int, ...] = (60, 360, 1440, 4320)
+
+    #: Windows for rolling mean / max / standard deviation of rainfall.
+    #: The standard deviation separates a steady soak from a burst-and-pause
+    #: pattern of the same total depth.
+    rolling_stat_windows_minutes: tuple[int, ...] = (30, 180)
+
+    #: Lags (minutes) at which past rainfall is exposed directly, so the
+    #: tabular models get the history the LSTM reads from its sequence.
+    lag_minutes: tuple[int, ...] = (5, 15, 30, 60)
+
+    #: Windows for second-difference (acceleration) of accumulation.
+    acceleration_windows_minutes: tuple[int, ...] = (15, 30)
+
+    #: Windows for percentage change in accumulation.
+    percent_change_windows_minutes: tuple[int, ...] = (30, 60)
+
+    #: Include day-of-week and monsoon-season indicators alongside the
+    #: hour/day-of-year cyclical encodings.
+    seasonal_features: bool = True
+
+    #: Include the spatial rainfall gradient (this station minus the mean of
+    #: its neighbours), which separates "the storm is here" from "the storm
+    #: is over the whole district".
+    spatial_gradient: bool = True
+
+    #: Radii (metres) for the static station-density feature.
+    station_density_radii_m: tuple[float, ...] = (5000.0,)
 
 
 @dataclass
@@ -237,6 +278,13 @@ class Config:
 
     #: Accuracy to reach when ``operating_point == "accuracy"``.
     target_accuracy: float = 0.95
+
+    #: Required accuracy band ``[low, high]`` for the deployed operating
+    #: point.  The upper bound matters as much as the lower one: above it the
+    #: model is almost certainly getting its accuracy by predicting "no
+    #: flood" nearly everywhere, which is the degenerate solution the band is
+    #: there to exclude.
+    accuracy_band: tuple[float, float] = (0.95, 0.99)
 
     def to_json(self, path: str | Path) -> None:
         path = Path(path)

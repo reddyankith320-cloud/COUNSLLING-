@@ -84,6 +84,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--device", default=None, choices=("auto", "cpu", "cuda"))
     p.add_argument("--no-baselines", action="store_true")
+    p.add_argument(
+        "--no-test-eval", action="store_true",
+        help="skip the test split entirely (use while comparing candidates)",
+    )
     p.add_argument("--no-mlflow", action="store_true")
     p.add_argument("--config", default=None, help="load a saved config.json first")
     return p.parse_args()
@@ -177,7 +181,11 @@ def main() -> int:
     print(json.dumps(prepared.report(), indent=2, default=str))
 
     result = train(
-        prepared, cfg, args.outdir, run_baselines=not args.no_baselines
+        prepared,
+        cfg,
+        args.outdir,
+        run_baselines=not args.no_baselines,
+        evaluate_test=not args.no_test_eval,
     )
 
     if result.baselines:
