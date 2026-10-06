@@ -134,3 +134,29 @@ class TestMergeTable:
         assert merged["replaced"] == 0
         assert merged["not_trained"] == []
         assert merged["best"]["name"] == "a"
+
+
+SCORER = Path(__file__).resolve().parents[1] / "scripts" / "lstm_score_checkpoints.py"
+
+
+@pytest.fixture(scope="module")
+def scorer():
+    spec = importlib.util.spec_from_file_location("lstm_score_checkpoints", SCORER)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["lstm_score_checkpoints"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestParseEnsemble:
+    def test_accepts_name_and_count(self, scorer):
+        assert scorer.parse_ensemble("deep_h96_l3:3") == ("deep_h96_l3", 3)
+
+    @pytest.mark.parametrize(
+        "spec", ["", "bad", "deep_h96_l3", "deep_h96_l3:", ":3",
+                 "deep_h96_l3:1", "deep_h96_l3:0", "deep_h96_l3:x"]
+    )
+    def test_rejects_malformed_specs(self, scorer, spec):
+        """A single member is not an ensemble, and a typo must cost nothing."""
+        with pytest.raises(SystemExit, match="NAME:COUNT"):
+            scorer.parse_ensemble(spec)

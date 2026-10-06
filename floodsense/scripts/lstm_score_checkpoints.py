@@ -57,7 +57,22 @@ def parse_args() -> argparse.Namespace:
                         "checkpoints known to be invalid")
     p.add_argument("--note", action="append", default=[],
                    help="recorded in the table's notes; repeatable")
+    p.add_argument("--ensemble", default="",
+                   help="also score a seed ensemble from member checkpoints, "
+                        "as NAME:COUNT (e.g. deep_h96_l3:3). Lets an ensemble "
+                        "whose run died after training its members be scored "
+                        "without retraining them.")
+    p.add_argument("--merge", action="store_true",
+                   help="fold these rows into an existing table instead of "
+                        "replacing it")
     return p.parse_args()
+
+
+def parse_ensemble(spec: str) -> tuple[str, int]:
+    name, _, count = spec.partition(":")
+    if not name or not count.isdigit() or int(count) < 2:
+        raise SystemExit(f"--ensemble wants NAME:COUNT with COUNT>=2, got {spec!r}")
+    return name, int(count)
 
 
 def main() -> int:
@@ -88,12 +103,25 @@ def main() -> int:
         else:
             missing.append(candidate.name)
 
+    ensemble_request = None
+    if args.ensemble:
+        name, count = parse_ensemble(args.ensemble)
+        winner = next((c for c in everything if c.name == name), None)
+        if winner is None:
+            raise SystemExit(f"{name} is not one of the sweep's candidates")
+        members = [outdir / f"{name}_s{k}" for k in range(count)]
+        absent = [m.name for m in members
+                  if not (m / "floodsense_lstm.pt").exists()]
+        if absent:
+            raise SystemExit(f"ensemble members not trained: {absent}")
+        ensemble_request = (winner, count, members)
+
     print(f"[score] checkpoints to score: {[c.name for c in present]}")
     if skipped:
         print(f"[score] excluded by request: {skipped}")
     if missing:
         print(f"[score] no checkpoint (never trained): {missing}")
-    if not present:
+    if not present and not args.ensemble:
         raise SystemExit("no checkpoints to score")
 
     builds: dict[tuple[int, float], object] = {}
@@ -145,6 +173,52 @@ def main() -> int:
         if best is None or row["pr_auc"] > best["pr_auc"]:
             best = row
 
+    if ensemble_request is not None:
+        winner, count, members = ensemble_request
+        cfg = winner.apply(base, args.seed)
+        key = winner.window_key()
+        prepared = prepared_for(cfg, key)
+        stack = []
+        for member in members:
+            model = FloodSenseLSTM.load(member / "floodsense_lstm.pt")
+            probs, _, _ = predict(
+                model,
+                DataLoader(prepared.dataset("val"), batch_size=4096),
+                device,
+            )
+            stack.append(probs)
+            print(f"[score] {member.name} scored")
+        averaged = np.mean(stack, axis=0)
+        np.save(outdir / "ensemble_val_probs.npy", averaged)
+        scores = sweep.score_validation(prepared, cfg, averaged)
+        row = {
+            "name": f"{winner.name}_ensemble_x{count}",
+            "note": f"mean probability over {count} seeds",
+            "sequence_steps": winner.sequence_steps,
+            "negative_keep_rate": winner.negative_keep_rate,
+            "own_dataset_build": key != base_key,
+            "scored_from_checkpoint": True,
+            **scores,
+        }
+        rows.append(row)
+        print(
+            f"[score] {row['name']:<16} PR-AUC {row['pr_auc']:.4f} | "
+            f"ROC {row['roc_auc']:.4f} | event recall {row['event_recall']:.3f} | "
+            f"acc {row['accuracy']:.2%}"
+        )
+        if best is None or row["pr_auc"] > best["pr_auc"]:
+            best = row
+
+    not_trained, excluded, notes = missing, sorted(excluded), list(args.note)
+    out_path = results_dir / "lstm_sweep_validation.json"
+    if args.merge and out_path.exists():
+        merged = sweep.merge_table(json.loads(out_path.read_text()), rows)
+        rows, best = merged["candidates"], merged["best"]
+        not_trained, excluded = merged["not_trained"], merged["excluded"]
+        notes = merged["notes"] + notes
+        print(f"[score] merged: replaced {merged['replaced']} row(s), "
+              f"best is now {best['name']} ({best['pr_auc']:.4f})")
+
     payload = {
         "data_source": (
             f"SYNTHETIC (floodsense.synthetic, days={args.days}, "
@@ -153,12 +227,11 @@ def main() -> int:
         "selection_metric": "validation PR-AUC",
         "test_set_used": False,
         "selected": best["name"],
-        "not_trained": missing,
-        "excluded": sorted(excluded),
-        "notes": list(args.note),
+        "not_trained": not_trained,
+        "excluded": excluded,
+        "notes": notes,
         "candidates": rows,
     }
-    out_path = results_dir / "lstm_sweep_validation.json"
     out_path.write_text(json.dumps(payload, indent=2))
     (outdir / "selected.json").write_text(json.dumps(best, indent=2))
     print(f"\n[score] validation table -> {out_path}")
