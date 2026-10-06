@@ -67,6 +67,10 @@ class TrainResult:
     history: list[EpochRecord]
     model_path: str
     n_parameters: int
+    #: False when the run skipped the test split (a model-selection run).
+    #: The test fields then mirror validation, so they must not be reported
+    #: as test results - to_dict() writes null for them instead.
+    test_evaluated: bool = True
     data_report: dict = field(default_factory=dict)
     baselines: dict = field(default_factory=dict)
 
@@ -76,11 +80,18 @@ class TrainResult:
             "best_val_pr_auc": self.best_val_pr_auc,
             "threshold": self.threshold,
             "val": self.val_report.to_dict(),
-            "test": self.test_report.to_dict(),
-            "test_lift_over_base_rate": lift_over_base_rate(self.test_report),
+            "test_evaluated": self.test_evaluated,
+            "test": self.test_report.to_dict() if self.test_evaluated else None,
+            "test_lift_over_base_rate": (
+                lift_over_base_rate(self.test_report)
+                if self.test_evaluated
+                else None
+            ),
             "operating_points_val": self.operating_points,
             "val_events": self.val_event_report.to_dict(),
-            "test_events": self.test_event_report.to_dict(),
+            "test_events": (
+                self.test_event_report.to_dict() if self.test_evaluated else None
+            ),
             "interval_threshold": self.interval_threshold,
             "event_operating_curve_val": self.event_curve,
             "history": [asdict(h) for h in self.history],
@@ -374,6 +385,8 @@ def train(
             **event_kwargs,
         )
     else:
+        # Placeholders only. ``test_evaluated=False`` below makes to_dict()
+        # write null rather than publishing these as test numbers.
         test_report, test_event_report = val_report, val_event_report
 
     baselines: dict = {}
@@ -393,6 +406,7 @@ def train(
         test_event_report=test_event_report,
         interval_threshold=interval_threshold,
         event_curve=event_curve,
+        test_evaluated=bool(len(test_y)),
         history=history,
         model_path=str(model_path),
         n_parameters=model.n_parameters(),
@@ -429,13 +443,21 @@ def train(
 
     if verbose:
         print(f"\n[floodsense] validation : {val_report.summary_line()}")
-        print(f"[floodsense] test       : {test_report.summary_line()}")
         print(f"[floodsense] val events : {val_event_report.summary_line()}")
-        print(f"[floodsense] test events: {test_event_report.summary_line()}")
-        print(
-            f"[floodsense] test precision is {lift_over_base_rate(test_report):.1f}x "
-            f"the base rate of {test_report.base_rate:.5f}"
-        )
+        if len(test_y):
+            print(f"[floodsense] test       : {test_report.summary_line()}")
+            print(f"[floodsense] test events: {test_event_report.summary_line()}")
+        else:
+            print(
+                "[floodsense] test       : NOT EVALUATED (--no-test-eval); the "
+                "test block in metrics.json is null"
+            )
+        if len(test_y):
+            print(
+                f"[floodsense] test precision is "
+                f"{lift_over_base_rate(test_report):.1f}x the base rate of "
+                f"{test_report.base_rate:.5f}"
+            )
         print(f"[floodsense] artifacts  : {outdir}")
 
     return result

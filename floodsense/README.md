@@ -89,26 +89,48 @@ A forecast, not a nowcast. Two exclusions keep that target honest:
 
 ### Features
 
-Not "rainfall → flood". Per station, per 5-minute step (29 channels):
+Not "rainfall → flood". 54 causal channels per station per 5-minute step:
 
 | group | channels |
 | --- | --- |
 | current | `rain_5min`, `intensity_mm_hr` |
-| accumulation | 15 m, 30 m, 1 h, 3 h, 6 h, 24 h, 72 h |
+| accumulation | 10 m, 15 m, 30 m, 1 h, 2 h, 3 h, 6 h, 12 h, 24 h, 72 h |
+| **antecedent wetness** | `ewm_1h`, `ewm_6h`, `ewm_1d`, `ewm_3d` |
 | intensity | `peak_5min_30m`, `mean_intensity_30m`, `mean_intensity_1h` |
-| **acceleration** | `rate_15m`, `rate_30m`, `trend_slope_30m` |
-| antecedent state | `dry_spell_log`, `wet_ratio_24h_72h` |
+| rolling shape | `roll_mean/max/std` over 30 m and 3 h |
+| **acceleration** | `rate_15m/30m`, `accel_15m/30m`, `pct_change_30m/1h`, `trend_slope_30m` |
+| lags | `lag_rain_5m/15m/30m/1h` |
+| dry history | `dry_spell_log`, `wet_ratio_24h_72h` |
 | data quality | `observed`, `gap_log` |
-| **spatial** | `nbr_acc_30m/1h`, `nbr_max_acc_30m/1h` — the k nearest stations |
-| seasonality | `hour_sin/cos`, `doy_sin/cos` |
+| **spatial** | `nbr_acc_30m/1h`, `nbr_max_acc_30m/1h`, `gradient_30m/1h` |
+| seasonality | `hour_sin/cos`, `doy_sin/cos`, `dow_sin/cos`, `monsoon_ne`, `monsoon_sw` |
 
-Static per station: coordinates, historical alert rate, distance to the
-nearest flood-prone location, flood-prone counts within 1 km and 2 km.
+Static per station (9): coordinates, historical alert rate, distance to the
+nearest flood-prone location, flood-prone counts within 1 km and 2 km,
+station density within 5 km, distance to the nearest station.
 
-The spatial neighbour channels are what give the 30–60 minute horizon a
-chance: a storm cell already raining 8 km upstream arrives in tens of
-minutes. Without them the lead time is largely unforecastable from a
-single station's own gauge.
+Three of these groups do real work:
+
+**Exponentially weighted rainfall** is the one that matters most. A
+catchment's readiness to flood is an antecedent-wetness state: rain charges
+it, drainage bleeds it off at a roughly constant fractional rate. That is a
+leaky integrator, and an EWM *is* one — whereas a fixed-window accumulation
+approximates it badly, counting every minute inside the window equally and
+everything outside it not at all. Four half-lives let the model pick the
+drainage timescale instead of having one assumed for it.
+
+**The spatial channels** are what give the 30–60 minute horizon a chance: a
+storm cell already raining 8 km upstream arrives in tens of minutes. The
+gradient channel separates "the cell is centred here" from "it is raining
+across the whole district".
+
+**`roll_std`** separates a steady soak from burst-and-pause of identical
+total depth — two situations with the same accumulation and different flood
+risk.
+
+Warm-up is 9 days, not the 3 days the longest window implies, because an
+EWM initialised at zero reads low for a few half-lives and training on that
+stretch would teach the model that every record begins dry.
 
 ### Architecture
 
@@ -281,6 +303,102 @@ Per 5-minute interval, 95% recall costs ~0.5% precision. Collapsed into
 episodes the same threshold gives 94.2% event recall at 4.39 false alarms
 per station-day — the same model, counted the way an operations team would
 count it.
+
+## How a model gets chosen
+
+```
+TRAINING (earliest 70%)        fit every candidate
+        |
+VALIDATION (next 15%)          pick the model   (PR-AUC)
+        |                      pick the threshold (accuracy band)
+        v
+  FROZEN MODEL + FROZEN THRESHOLD
+        |
+TEST (latest 15%)              read once, report
+```
+
+Three phases, three scripts, and the test split is unreachable from the
+first two:
+
+```bash
+# Phase 1 - five tabular families x two feature sets, validation only
+python scripts/experiments.py --days 540 --stations 32 --seed 20260601
+
+# Phase 2 - the LSTM, also validation only
+python scripts/train.py --days 540 --stations 32 --seed 20260601     --no-test-eval --epochs 40 --hidden-size 64
+
+# Phase 3 - select, freeze, audit, then one test pass
+python scripts/final_evaluation.py --days 540 --stations 32 --seed 20260601
+```
+
+`experiments.build_matrices` returns `train` and `val` and has no code path
+to `test`; there is a test asserting that. `scripts/train.py --no-test-eval`
+skips the test split entirely. Phase 3 refuses to print test metrics at all
+if the leakage audit fails, unless `--force`.
+
+**Selection is validation PR-AUC**, ties broken by event recall then F1.
+Accuracy never selects: at this base rate it ranks "predict nothing" first.
+It is applied afterwards, as a constraint, by choosing the threshold.
+
+### The threshold rule
+
+`events.threshold_for_accuracy_band` filters candidate thresholds to those
+whose **validation** accuracy falls in the required band, then takes the
+highest **event-level** recall among the survivors, breaking ties on the
+lowest threshold. Accuracy is the constraint imposed from outside; catching
+floods is the job — so accuracy filters and recall chooses, never the
+reverse.
+
+The band has an upper bound for a reason. Above roughly 99%, accuracy is
+almost certainly coming from predicting "no flood" nearly everywhere, which
+is the degenerate solution the band exists to exclude.
+
+## Leakage audit
+
+`scripts/final_evaluation.py` runs `floodsense.audit` against the real
+prepared data before it opens the test split, and writes
+`results/leakage_audit.json`. Thirteen checks:
+
+| check | what it would catch |
+| --- | --- |
+| `future_rainfall_leakage` | an off-by-one in any rolling window — adds 100 mm at one step and asserts no earlier feature moves, across all 54 channels |
+| `future_alert_leakage` | the station alert rate computed over the whole record instead of the training period — target leakage, the feature derived from the label |
+| `label_horizon_causality` | a label pointing at an alert inside its own input window |
+| `temporal_split_order` | random or shuffled splits |
+| `split_embargo` | splits adjacent enough that a training input window overlaps an evaluation sample |
+| `split_disjoint` | the same (step, station) in two splits |
+| `duplicate_events_across_splits` | one flood event contributing positives to two splits |
+| `scaler_fit_region` | normalisation fitted on data the model should not have seen |
+| `warmup_respected` | samples drawn while long windows are still filling |
+| `evaluation_split_integrity` | negative subsampling applied to validation or test |
+| `threshold_selected_on_validation` | the operating point chosen on test |
+| `station_overlap` | *(INFO)* stations are shared across splits by design — the split is temporal; a model for ungauged locations would need a station-wise split too, and would score worse |
+| `feature_selection_on_test` | *(INFO)* no data-driven feature selection exists; the channel list is fixed in `FeatureConfig` before any data is read |
+
+The FAIL branches are themselves tested: `tests/test_audit.py` breaks each
+guarantee on purpose and asserts the audit notices. An audit that only ever
+returns PASS is indistinguishable from one that is not looking.
+
+## Dashboard
+
+```bash
+python scripts/final_evaluation.py     # writes results/final_metrics.json
+python scripts/serve_dashboard.py      # http://127.0.0.1:8000/dashboard/
+```
+
+Every number on the page is fetched from `results/final_metrics.json` at
+load time. Nothing is written into the markup — `tests/test_dashboard.py`
+asserts the static markup contains *no digits at all*, so a stale number
+cannot survive a model change and still be sitting there at a demo. It
+shows accuracy as the hero figure with its band membership, event recall
+against the ≥80% target, lead time, false-alarm load, PR-AUC and ROC-AUC,
+the confusion matrix, the full threshold sweep as a chart and a table, and
+the provenance block (which split chose the threshold, and the audit
+result). A synthetic run renders a warning banner driven by the
+`synthetic_data` flag.
+
+The palette is the data-viz reference palette, validated by its checker in
+both light and dark mode; no dual axis anywhere.
 
 ## Data sources
 

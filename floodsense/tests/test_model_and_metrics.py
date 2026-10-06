@@ -484,3 +484,43 @@ class TestAccuracyOperatingPoint:
             np.zeros(0), np.zeros(0), 0.95
         )
         assert (thr, accuracy, recall) == (0.5, 0.0, 0.0)
+
+
+class TestTestEvaluationFlag:
+    """A selection run must not publish validation numbers as test numbers."""
+
+    def _result(self, evaluated: bool):
+        from floodsense.events import EventReport
+        from floodsense.train import TrainResult
+
+        report = compute_report(
+            np.array([0, 1, 0, 0]), np.array([0.1, 0.9, 0.2, 0.1]), 0.5
+        )
+        events = EventReport(
+            n_events=1, n_detected=1, event_recall=1.0, n_alarms=1,
+            n_false_alarms=0, false_alarms_per_station_day=0.0,
+            precision_by_alarm=1.0, mean_lead_minutes=50.0,
+            median_lead_minutes=50.0, station_days=1.0,
+        )
+        return TrainResult(
+            best_epoch=1, best_val_pr_auc=0.2, threshold=0.5,
+            val_report=report, test_report=report,
+            operating_points=[], val_event_report=events,
+            test_event_report=events, interval_threshold=0.5,
+            event_curve=[], test_evaluated=evaluated, history=[],
+            model_path="x.pt", n_parameters=10,
+        )
+
+    def test_skipped_test_serialises_as_null(self):
+        payload = self._result(False).to_dict()
+        assert payload["test_evaluated"] is False
+        assert payload["test"] is None
+        assert payload["test_events"] is None
+        assert payload["test_lift_over_base_rate"] is None
+        assert payload["val"] is not None
+
+    def test_evaluated_test_serialises_normally(self):
+        payload = self._result(True).to_dict()
+        assert payload["test_evaluated"] is True
+        assert payload["test"] is not None
+        assert payload["test_events"] is not None

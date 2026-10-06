@@ -398,6 +398,9 @@ function renderMeta(m) {
   const p = m.threshold_provenance || {};
   const rows = [
     ["Model", `<code>${esc(m.model)}</code>`],
+    ["Operating point rule", `${esc(m.operating_point)} band ` +
+      `${pct(m.accuracy_band_target[0], 0)}\u2013${pct(m.accuracy_band_target[1], 0)}`],
+    ["Selection metric", esc(m.selection_metric)],
     ["Operating threshold", `<code>${Number(m.threshold).toFixed(6)}</code>`],
     ["Threshold chosen on", `${esc(p.selected_on || "?")} &mdash; ${esc(p.rule || "?")}`],
     ["Validation accuracy", pct(m.validation_accuracy, 2)],
