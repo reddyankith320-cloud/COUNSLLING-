@@ -1,0 +1,13 @@
+{
+  "model": "FloodSense LSTM (deep_h96_l3_ensemble_x3)",
+  "threshold": 0.22331822934759205,
+  "split": "test",
+  "test_period": "2024-04-05 12:20:00+08:00 to 2024-06-23 23:55:00+08:00",
+  "matrix": {
+    "true_positive": 463,
+    "false_positive": 9804,
+    "true_negative": 719364,
+    "false_negative": 441
+  },
+  "unit": "one station-5-minute interval"
+}
