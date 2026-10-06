@@ -1,0 +1,111 @@
+{
+  "attempted_at": "2026-10-06T18:38:40.277182+08:00",
+  "outcome": "NO_METRICS_COMPUTABLE",
+  "reason": "The uploads contain real rainfall but no flood-alert records, and the rainfall span is far shorter than the feature warm-up.",
+  "uploads": {
+    "HistoricalRainfallacrossSingapore2016.csv": {
+      "kind": "REAL DATA (NEA)",
+      "rows": 5543,
+      "stations": 55,
+      "distinct_timestamps": 102,
+      "period": [
+        "2016-12-02 21:49:59+08:00",
+        "2016-12-03 06:14:59+08:00"
+      ],
+      "span_hours": 8.42,
+      "reading_type": "TB1 Rainfall 5 Minute Total F",
+      "non_zero_readings": 260,
+      "max_mm_per_5min": 3.799999952316284,
+      "validation": {
+        "table": "rainfall",
+        "n_rows_in": 5543,
+        "n_rows_out": 5543,
+        "n_dropped": 0,
+        "passed": true,
+        "issues": [
+          {
+            "level": "INFO",
+            "code": "off_grid_timestamps",
+            "detail": "readings not aligned to the 5-minute grid; RainGrid floors them and averages collisions",
+            "n_rows": 11086
+          },
+          {
+            "level": "INFO",
+            "code": "coverage",
+            "detail": "55 stations over 0.4 days; 99.8% of the slots a complete record would hold",
+            "n_rows": 0
+          }
+        ]
+      }
+    },
+    "FloodAlertsacrossSingapore.json": {
+      "kind": "OpenAPI SPECIFICATION (not data)",
+      "alert_records": 0,
+      "value": "Confirms the endpoint /v2/real-time/api/weather/flood-alerts and the CAP-derived schema."
+    },
+    "RelativeHumidityacrossSingapore.json": {
+      "kind": "OpenAPI SPECIFICATION (not data)",
+      "observations": 0,
+      "note": "Documents /v2/real-time/api/relative-humidity. Humidity is not a FloodSense input."
+    },
+    "FloodProneAreas.csv": {
+      "kind": "REAL DATA (PUB)",
+      "rows": 4,
+      "columns": [
+        "year",
+        "hectares"
+      ],
+      "values": [
+        {
+          "year": 2022,
+          "hectares": 27.0
+        },
+        {
+          "year": 2023,
+          "hectares": 24.1
+        },
+        {
+          "year": 2024,
+          "hectares": 23.6
+        },
+        {
+          "year": 2025,
+          "hectares": 23.3
+        }
+      ],
+      "trend": {
+        "first_year": 2022,
+        "last_year": 2025,
+        "first_hectares": 27.0,
+        "last_hectares": 23.3,
+        "absolute_change_ha": -3.6999999999999993,
+        "percent_change": -13.703703703703702,
+        "mean_annual_change_ha": -1.2333333333333332
+      },
+      "note": "National annual aggregate. Not a geospatial layer and not a label source."
+    }
+  },
+  "blockers": [
+    {
+      "blocker": "no_labels",
+      "detail": "0 flood-alert records were supplied, so the target variable does not exist. Accuracy of a classifier with no labels is undefined."
+    },
+    {
+      "blocker": "insufficient_history",
+      "detail": "Rainfall spans 8.4 hours (102 five-minute steps). The feature warm-up alone is 2592 steps (~9 days) for EWM burn-in and 72-hour accumulations.",
+      "pipeline_error": "ValueError: warm-up (2592 steps) exceeds the record (102 steps)"
+    },
+    {
+      "blocker": "no_chronological_split",
+      "detail": "A train/validation/test split by time needs enough flood events in every split; 8.4 hours cannot be split three ways."
+    }
+  ],
+  "what_would_unblock": [
+    "Flood-alert records (not the API spec) covering the same period as the rainfall - the binding constraint.",
+    "Rainfall covering at least several months so the warm-up and three-way split fit; the full annual NEA CSVs are ~6.4M rows each.",
+    "Network access to api-open.data.gov.sg and data.gov.sg to fetch both automatically."
+  ],
+  "accuracy": null,
+  "accuracy_note": "Not computed. No labels and insufficient history. No number is reported rather than a fabricated one.",
+  "synthetic_data": false
+}

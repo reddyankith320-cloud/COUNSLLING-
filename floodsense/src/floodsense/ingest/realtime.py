@@ -28,9 +28,15 @@ from ..schema import TIMEZONE
 #: NEA, "Rainfall across Singapore (API)" - 5-minute station totals.
 RAINFALL_URL = "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
 
-#: PUB, "Flood Alerts across Singapore (API)".  Confirm against the dataset
-#: page before relying on it; override with the ``url`` argument.
-FLOOD_ALERTS_URL = "https://api-open.data.gov.sg/v2/real-time/api/flood-alerts"
+#: PUB, "Flood Alerts across Singapore (API)".  Confirmed against the
+#: dataset's OpenAPI specification - note the ``weather/`` segment, which is
+#: absent from the other real-time endpoints.
+FLOOD_ALERTS_URL = (
+    "https://api-open.data.gov.sg/v2/real-time/api/weather/flood-alerts"
+)
+
+#: Severity codes PUB publishes, most severe first (CAP v1.2).
+ALERT_SEVERITIES = ("Extreme", "Severe", "Moderate", "Minor")
 
 _ALERT_KEYS = {
     "alert_id": ("id", "alertId", "alert_id", "eventId"),
@@ -185,6 +191,132 @@ def fetch_flood_alerts(
     )
 
 
+def parse_flood_alerts_v2(payload: dict[str, Any]) -> pd.DataFrame:
+    """Parse the documented PUB flood-alerts response.
+
+    The published shape is CAP-derived and nests two levels deeper than the
+    other real-time feeds::
+
+        data.records[].datetime               when PUB issued the observation
+        data.records[].item.msgType           "Alert" or "Cancel"
+        data.records[].item.identifier        this message's id
+        data.records[].item.references        "sender,identifier,sentTime"
+        data.records[].item.readings[].area.areaDesc
+        data.records[].item.readings[].area.circle   [lat, lng, radius_km]
+        data.records[].item.readings[].severity      Extreme|Severe|Moderate|Minor
+        data.records[].item.readings[].urgency
+        data.records[].item.readings[].description
+
+    Two details in there are easy to get wrong and both corrupt the labels:
+
+    **``circle`` is [latitude, longitude, radius]** - latitude first, the
+    opposite of GeoJSON. Swapping them puts every Singapore alert at
+    longitude 1.3, latitude 103.8, which is in the Sea of Japan.
+
+    **Every flood produces a paired ``Cancel`` message** marking that it has
+    subsided. Treating those as alerts would double every event and plant a
+    second, spurious label at the moment the water went down. So only
+    ``msgType == "Alert"`` becomes an event, and the matching ``Cancel``
+    (linked through ``references``) supplies ``ts_end``.
+
+    The ``radius`` is the broadcast radius and, as the specification states,
+    is *not* the extent of the flooding - so it is recorded but never used
+    as a flood footprint.
+    """
+    records = _dig(payload, ("data", "records")) or []
+    alerts: list[dict[str, Any]] = []
+    cancels: list[dict[str, Any]] = []
+    skipped_no_location = 0
+
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        item = record.get("item") or {}
+        msg_type = str(item.get("msgType", "Alert"))
+        identifier = item.get("identifier") or f"alert-{index}"
+        issued = record.get("datetime") or record.get("updatedTimestamp")
+
+        if msg_type.lower() == "cancel":
+            cancels.append(
+                {
+                    "ts_end": issued,
+                    "references": str(item.get("references", "")),
+                }
+            )
+            continue
+
+        readings = item.get("readings") or []
+        if not readings:
+            skipped_no_location += 1
+            continue
+
+        for reading_index, reading in enumerate(readings):
+            area = reading.get("area") or {}
+            circle = area.get("circle")
+            if not (isinstance(circle, (list, tuple)) and len(circle) >= 2):
+                skipped_no_location += 1
+                continue
+            latitude, longitude = _as_float(circle[0]), _as_float(circle[1])
+            if latitude is None or longitude is None:
+                skipped_no_location += 1
+                continue
+
+            alerts.append(
+                {
+                    "alert_id": (
+                        identifier if len(readings) == 1
+                        else f"{identifier}#{reading_index}"
+                    ),
+                    "ts_start": issued,
+                    "ts_end": None,
+                    "location_name": (
+                        area.get("areaDesc") or reading.get("description") or ""
+                    ),
+                    "longitude": longitude,
+                    "latitude": latitude,
+                    "severity": reading.get("severity", ""),
+                    "urgency": reading.get("urgency", ""),
+                    "_identifier": identifier,
+                    "_broadcast_radius_km": (
+                        _as_float(circle[2]) if len(circle) > 2 else None
+                    ),
+                }
+            )
+
+    frame = pd.DataFrame(
+        alerts,
+        columns=[
+            "alert_id", "ts_start", "ts_end", "location_name",
+            "longitude", "latitude", "severity", "urgency",
+            "_identifier", "_broadcast_radius_km",
+        ],
+    )
+
+    # Pair each Cancel back to the Alert it references to get a duration.
+    matched = 0
+    if len(frame) and cancels:
+        for cancel in cancels:
+            reference = cancel["references"]
+            for identifier in frame["_identifier"].unique():
+                if identifier and identifier in reference:
+                    mask = (frame["_identifier"] == identifier) & frame["ts_end"].isna()
+                    if mask.any():
+                        frame.loc[mask, "ts_end"] = cancel["ts_end"]
+                        matched += 1
+                    break
+
+    if not frame.empty:
+        frame["ts_start"] = _to_sgt(frame["ts_start"])
+        frame["ts_end"] = _to_sgt(frame["ts_end"])
+        frame = frame.dropna(subset=["ts_start"]).reset_index(drop=True)
+
+    frame.attrs["records_seen"] = len(records)
+    frame.attrs["cancel_messages"] = len(cancels)
+    frame.attrs["cancels_matched"] = matched
+    frame.attrs["dropped_without_location"] = skipped_no_location
+    return frame.drop(columns=["_identifier"], errors="ignore")
+
+
 def parse_flood_alerts(payload: dict[str, Any]) -> pd.DataFrame:
     """Map an alerts payload onto the canonical alert schema.
 
@@ -194,6 +326,14 @@ def parse_flood_alerts(payload: dict[str, Any]) -> pd.DataFrame:
     a station - and the count of dropped records is reported through the
     frame's ``attrs``.
     """
+    # The documented shape nests an "item" per record; use the exact parser
+    # for it and keep the tolerant one for anything else.
+    candidate = _dig(payload, ("data", "records"))
+    if isinstance(candidate, list) and any(
+        isinstance(r, dict) and "item" in r for r in candidate
+    ):
+        return parse_flood_alerts_v2(payload)
+
     records = _find_records(payload)
     rows, dropped = [], 0
 

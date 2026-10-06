@@ -365,3 +365,175 @@ class TestLocalStaging:
     def test_missing_directory_is_a_clear_error(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="fetch_data"):
             load_canonical(tmp_path / "nope")
+
+
+class TestPubFloodAlertSchema:
+    """The documented PUB flood-alert shape, from the dataset's OpenAPI spec.
+
+    Two details here are easy to get wrong and both corrupt the labels: the
+    ``circle`` is [latitude, longitude, radius] rather than GeoJSON order,
+    and every flood carries a paired ``Cancel`` message.
+    """
+
+    def _alert(self, identifier="ID-1", msg_type="Alert", lat=1.33201, lng=103.87015,
+               when="2025-05-22T09:55:00+08:00", severity="Minor"):
+        return {
+            "datetime": when,
+            "updatedTimestamp": when,
+            "item": {
+                "type": "observation",
+                "identifier": identifier,
+                "msgType": msg_type,
+                "sender": "pub_joint_ops_ctr@pub.gov.sg",
+                "scope": "Public",
+                "status": "Actual",
+                "readings": [
+                    {
+                        "area": {
+                            "areaDesc": "at Bt Timah Rd from Wilby Rd to Blackmore Dr",
+                            "circle": [lat, lng, 1],
+                        },
+                        "category": "Met",
+                        "certainty": "Observed",
+                        "description": "Flash flood at Bt Timah Rd.",
+                        "event": "Flood",
+                        "headline": "Flash Flood Alert",
+                        "severity": severity,
+                        "urgency": "Immediate",
+                    }
+                ],
+            },
+        }
+
+    def _cancel(self, references, when="2025-05-22T11:10:00+08:00"):
+        return {
+            "datetime": when,
+            "item": {
+                "msgType": "Cancel",
+                "identifier": "CANCEL-1",
+                "references": f"pub_joint_ops_ctr@pub.gov.sg, {references}, {when}",
+                "readings": [],
+            },
+        }
+
+    def test_circle_is_latitude_first_not_geojson(self):
+        """Swapping these puts every Singapore alert in the Sea of Japan."""
+        payload = {"data": {"records": [self._alert()]}}
+        alerts = parse_flood_alerts(payload)
+        assert alerts.loc[0, "longitude"] == pytest.approx(103.87015)
+        assert alerts.loc[0, "latitude"] == pytest.approx(1.33201)
+        # And it must survive the Singapore bounding-box validator.
+        from floodsense.ingest.validate import validate_alerts
+
+        _, report = validate_alerts(alerts)
+        assert not any(
+            i.code == "coordinates_outside_singapore" for i in report.errors
+        )
+
+    def test_cancel_is_not_counted_as_a_flood_event(self):
+        payload = {
+            "data": {
+                "records": [self._alert("ID-1"), self._cancel("ID-1")]
+            }
+        }
+        alerts = parse_flood_alerts(payload)
+        assert len(alerts) == 1
+        assert alerts.attrs["cancel_messages"] == 1
+
+    def test_cancel_supplies_the_end_time(self):
+        payload = {
+            "data": {"records": [self._alert("ID-1"), self._cancel("ID-1")]}
+        }
+        alerts = parse_flood_alerts(payload)
+        assert alerts.attrs["cancels_matched"] == 1
+        duration = alerts.loc[0, "ts_end"] - alerts.loc[0, "ts_start"]
+        assert duration == pd.Timedelta(minutes=75)
+
+    def test_unmatched_alert_has_no_end_time(self):
+        payload = {"data": {"records": [self._alert("ID-1")]}}
+        alerts = parse_flood_alerts(payload)
+        assert pd.isna(alerts.loc[0, "ts_end"])
+
+    def test_severity_and_urgency_are_captured(self):
+        payload = {"data": {"records": [self._alert(severity="Severe")]}}
+        alerts = parse_flood_alerts(payload)
+        assert alerts.loc[0, "severity"] == "Severe"
+        assert alerts.loc[0, "urgency"] == "Immediate"
+
+    def test_area_description_becomes_the_location_name(self):
+        alerts = parse_flood_alerts({"data": {"records": [self._alert()]}})
+        assert "Bt Timah Rd" in alerts.loc[0, "location_name"]
+
+    def test_multiple_readings_get_distinct_ids(self):
+        record = self._alert("ID-1")
+        record["item"]["readings"].append(
+            dict(record["item"]["readings"][0], severity="Moderate")
+        )
+        alerts = parse_flood_alerts({"data": {"records": [record]}})
+        assert len(alerts) == 2
+        assert alerts["alert_id"].nunique() == 2
+
+    def test_broadcast_radius_is_recorded_but_not_a_footprint(self):
+        """The spec states the radius is NOT the extent of flooding."""
+        alerts = parse_flood_alerts({"data": {"records": [self._alert()]}})
+        assert "_broadcast_radius_km" in alerts.columns
+        assert alerts.loc[0, "_broadcast_radius_km"] == pytest.approx(1.0)
+
+    def test_output_feeds_the_labeller(self):
+        """Canonical columns, so build_labels consumes it unchanged."""
+        alerts = parse_flood_alerts({"data": {"records": [self._alert()]}})
+        for column in ("alert_id", "ts_start", "ts_end", "longitude", "latitude"):
+            assert column in alerts.columns
+        assert str(alerts["ts_start"].dt.tz) == "Asia/Singapore"
+
+    def test_empty_records_yield_an_empty_frame(self):
+        alerts = parse_flood_alerts({"data": {"records": []}})
+        assert alerts.empty
+
+
+class TestRealHistoricalCsvHeaders:
+    """The published CSV uses snake_case; the dataset page shows title-case."""
+
+    def test_snake_case_headers_load(self, tmp_path):
+        path = tmp_path / "rain.csv"
+        pd.DataFrame(
+            {
+                "date": ["2016-12-02"],
+                "timestamp": ["2016-12-02T21:49:59+08:00"],
+                "station_id": ["S77"],
+                "station_name": ["Alexandra Road"],
+                "location_longitude": [103.8125],
+                "location_latitude": [1.2937],
+                "reading_value": [0.4],
+                "reading_type": [HISTORICAL_READING_TYPE],
+                "reading_unit": ["mm"],
+            }
+        ).to_csv(path, index=False)
+
+        readings, stations = load_historical_csv(path)
+        assert len(readings) == 1
+        assert readings.loc[0, "rainfall_mm"] == pytest.approx(0.4)
+        assert stations.loc[0, "station_id"] == "S77"
+
+    def test_title_case_headers_still_load(self, tmp_path):
+        path = tmp_path / "rain.csv"
+        pd.DataFrame(
+            {
+                "Timestamp": ["2016-12-02T21:49:59+08:00"],
+                "Station Id": ["S77"],
+                "Station Name": ["Alexandra Road"],
+                "Location Longitude": [103.8125],
+                "Location Latitude": [1.2937],
+                "Reading Value": [0.4],
+                "Reading Type": [HISTORICAL_READING_TYPE],
+            }
+        ).to_csv(path, index=False)
+
+        readings, _ = load_historical_csv(path)
+        assert len(readings) == 1
+
+    def test_unknown_headers_fail_with_a_useful_message(self, tmp_path):
+        path = tmp_path / "rain.csv"
+        pd.DataFrame({"when": ["2016-12-02"], "mm": [0.4]}).to_csv(path, index=False)
+        with pytest.raises(ValueError, match="after.*normalisation|missing"):
+            load_historical_csv(path)

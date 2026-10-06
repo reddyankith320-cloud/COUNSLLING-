@@ -84,18 +84,27 @@ FLOOD_PRONE_AREAS_DATASET: Final[str] = "d_c4aed98f1533eb3a66f65dbb1a30da46"
 #: historical CSVs.  Rows with any other reading type are dropped.
 HISTORICAL_READING_TYPE: Final[str] = "TB1 Rainfall 5 Minute Total F"
 
-#: Column names as published in the historical rainfall CSVs, mapped to the
-#: canonical schema.
+#: Column names in the historical rainfall CSVs, mapped to the canonical
+#: schema. Keys are *normalised* headers (lower-cased, trimmed, spaces turned
+#: into underscores), because the published exports are not consistent: the
+#: dataset page documents title-case headers ("Station Id") while the CSV
+#: download delivers snake_case ("station_id"). Normalising first accepts
+#: both without a second mapping table.
 HISTORICAL_CSV_RENAME: Final[dict[str, str]] = {
-    "Timestamp": "ts",
-    "Station Id": "station_id",
-    "Station Name": "station_name",
-    "Location Longitude": "longitude",
-    "Location Latitude": "latitude",
-    "Reading Value": "rainfall_mm",
-    "Reading Type": "reading_type",
-    "Reading Unit": "reading_unit",
+    "timestamp": "ts",
+    "station_id": "station_id",
+    "station_name": "station_name",
+    "location_longitude": "longitude",
+    "location_latitude": "latitude",
+    "reading_value": "rainfall_mm",
+    "reading_type": "reading_type",
+    "reading_unit": "reading_unit",
 }
+
+
+def normalise_header(name: str) -> str:
+    """Lower-case, trim and underscore a CSV header for lookup."""
+    return str(name).strip().lower().replace(" ", "_")
 
 #: Observation cadence of both the historical CSVs and the real-time API.
 STEP_MINUTES: Final[int] = 5

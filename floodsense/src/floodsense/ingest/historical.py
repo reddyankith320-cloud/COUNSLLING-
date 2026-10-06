@@ -28,6 +28,7 @@ from ..schema import (
     HISTORICAL_READING_TYPE,
     SG_BOUNDS,
     TIMEZONE,
+    normalise_header,
 )
 
 #: data.gov.sg issues a signed CSV URL through this endpoint.
@@ -59,7 +60,17 @@ def load_historical_csv(
     station_frames: list[pd.DataFrame] = []
 
     for chunk in pd.read_csv(path, chunksize=chunksize, low_memory=False):
+        chunk = chunk.rename(columns=lambda c: normalise_header(c))
         chunk = chunk.rename(columns=HISTORICAL_CSV_RENAME)
+
+        missing = {"ts", "station_id", "rainfall_mm"} - set(chunk.columns)
+        if missing:
+            raise ValueError(
+                f"{path} is missing the columns {sorted(missing)} after "
+                f"normalisation; headers seen: {sorted(chunk.columns)}. The "
+                "published exports use either title-case or snake_case - a "
+                "third spelling needs adding to HISTORICAL_CSV_RENAME."
+            )
 
         if reading_type is not None and "reading_type" in chunk.columns:
             chunk = chunk.loc[chunk["reading_type"] == reading_type]
