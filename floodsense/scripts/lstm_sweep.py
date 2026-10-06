@@ -121,8 +121,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--merge", action="store_true",
                    help="replace same-named rows in an existing validation "
                         "table instead of overwriting it, then re-pick the best")
-    p.add_argument("--note", default="",
-                   help="recorded in the table's notes, e.g. why a rerun happened")
+    p.add_argument("--note", action="append", default=[],
+                   help="recorded in the table's notes, e.g. why a rerun "
+                        "happened; repeatable, and every one is kept")
     p.add_argument("--outdir", default="artifacts/lstm_sweep")
     p.add_argument("--results", default="results")
     return p.parse_args()
@@ -429,8 +430,7 @@ def main() -> int:
         if not_trained or excluded:
             print(f"[sweep] still outstanding: not_trained={not_trained} "
                   f"excluded={excluded}")
-    if args.note:
-        notes.append(args.note)
+    notes.extend(args.note)
 
     out_path.write_text(
         json.dumps(

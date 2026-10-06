@@ -2,11 +2,15 @@
   "data_source": "SYNTHETIC (floodsense.synthetic, days=540, stations=32, seed=20261006)",
   "selection_metric": "validation PR-AUC",
   "test_set_used": false,
-  "selected": "deep_h96_l3",
+  "selected": "deep_h96_l3_ensemble_x3",
+  "not_trained": [],
+  "excluded": [],
   "notes": [
     "Rebuilt from surviving checkpoints: the sweep process was killed at a 2-hour background limit partway through long_window_72, before it could write its table.",
     "more_negatives excluded: a sweep bug (fixed in 558da1c) meant its negative_keep_rate never reached the window sampler, so its checkpoint is a bit-identical duplicate of baseline_h64 rather than a test of a higher keep rate. It needs retraining before it can be reported.",
-    "long_window_72 trained in a separate pass after the first sweep process hit a 2-hour background limit during it."
+    "more_negatives retrained on the fixed script (558da1c) with its own dataset build; the superseded row was a duplicate of baseline_h64. This note was dropped at the time because --note was not an appending argument, and is restored here.",
+    "long_window_72 trained in a separate pass after the first sweep process hit a 2-hour background limit during it.",
+    "Seed ensemble trained in its own pass via --ensemble-only, after the first sweep process was killed at a 2-hour background limit before reaching it."
   ],
   "candidates": [
     {
@@ -187,6 +191,23 @@
       "false_alarms_per_station_day": 1.8208465336251498,
       "mean_lead_minutes": 53.11904761904762,
       "caveat": "sequence length differs, so the embargo and therefore the validation index set differ slightly from the other rows (<0.02% of validation samples)"
+    },
+    {
+      "name": "deep_h96_l3_ensemble_x3",
+      "note": "mean probability over 3 seeds",
+      "sequence_steps": 36,
+      "negative_keep_rate": 0.08,
+      "own_dataset_build": false,
+      "pr_auc": 0.13938664132943276,
+      "roc_auc": 0.8924568294674962,
+      "threshold": 0.22331822934759205,
+      "accuracy": 0.9515968427110273,
+      "event_recall": 0.8443579766536965,
+      "recall": 0.642811501597444,
+      "precision": 0.028187957073608116,
+      "f1": 0.05400762334245987,
+      "false_alarms_per_station_day": 1.8931207963817809,
+      "mean_lead_minutes": 53.34101382488479
     }
   ]
 }
